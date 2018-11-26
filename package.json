@@ -1,0 +1,33 @@
+{
+  "name": "jssb",
+  "version": "1.0.0",
+  "description": "Discord JavaScript Sound Board bot for playing sound files and youtube audio to a voice channel. Also, can record sound from connected channel.",
+  "main": "botSB.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "bot.js": "0.0.1",
+    "bufferutil": "^3.0.3",
+    "discord.js": "^11.4.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AntonGrushin/JSSB.git"
+  },
+  "keywords": [
+    "discord",
+    "javascript",
+    "soundboard",
+    "discord.js",
+    "recording",
+    "youtube",
+    "audio"
+  ],
+  "author": "Anton Grushin",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/AntonGrushin/JSSB/issues"
+  },
+  "homepage": "https://github.com/AntonGrushin/JSSB#readme"
+}

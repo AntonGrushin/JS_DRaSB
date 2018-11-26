@@ -1,1 +1,1 @@
-# JSSB
+# JavaScript SoundBoard (In Development)
