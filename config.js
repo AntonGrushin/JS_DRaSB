@@ -24,8 +24,6 @@ module.exports = {
 
 	// ======== BOT OPTIONS ========
 
-	//Sound files folder (relative path, example: 'sounds' )
-	SoundsFolder: 'sounds',
 	//Bot will automatically join a room with 'AutoJoinMembersAmount' or more members
 	AutoJoinTalkingRoom: true,
 	//If this amount of members is reached in a voice channel, bot will automatically join it (if AutoJoinTalkingRoom == true)

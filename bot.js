@@ -75,7 +75,7 @@ function recieversDestroy() {
 //Start recording on currently connected channel
 function startRecording(connection) {
 	//For some reason in order to recieve any incoming voice data from other members we need to send something first, therefore we are sending a very short sound and start the recording right after
-	const dispatcher = connection.playFile(path.resolve(__dirname, config.SoundsFolder, '00_empty.mp3'));
+	const dispatcher = connection.playFile(path.resolve(__dirname, config.folders.Sounds, '00_empty.mp3'));
 
 	dispatcher.on('end', () => {
 		//console.log('Finished playing!');
@@ -94,7 +94,7 @@ function startRecording(connection) {
 				let totalStreamSize = 0;
 				let fileTimeNow = utils.fileTimeNow();
 				//let durationMs = 0;
-				let tempfile = path.resolve(__dirname, config.TempFolder, fileTimeNow + '_' + utils.cutFillString(user.username, 25));
+				let tempfile = path.resolve(__dirname, config.folders.Temp, fileTimeNow + '_' + utils.cutFillString(user.username, 25));
 				const writable = fs.createWriteStream(tempfile + '.pcm');
 				//const writable = fs.createWriteStream('/root/soundBoardFalanor/recorded.mp3');
 
@@ -153,7 +153,7 @@ function startRecording(connection) {
 
 
 	});
-	dispatcher.on('error', error => utils.report("Couldn't play sound file '" + path.resolve(__dirname, config.SoundsFolder, '00_empty.mp3') + "' on'" + connection.channel.name + "' channel. Error: " + error, 'r'));
+	dispatcher.on('error', error => utils.report("Couldn't play sound file '" + path.resolve(__dirname, config.folders.Sounds, '00_empty.mp3') + "' on'" + connection.channel.name + "' channel. Error: " + error, 'r'));
 }
 
 //Join voice channel actions
