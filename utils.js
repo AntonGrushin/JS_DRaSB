@@ -10,7 +10,7 @@
  *  
  *  JS_DRaSB Copyright 2018 - Anton Grushin
  *      
- *-=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=
+ *
  *        utils.js
  *    Utility functions for general purpose.
  *********************************************************************/
@@ -70,6 +70,9 @@ module.exports = {
 
 	//Reporting process functions to console and logfile
 	report: function (message, color=0, doLogfileReport=true) {
+		//12:48:24.746 Joined channel 'Myth+'!				<== Console message
+		//2018.12.09 12:48:24.746 Joined channel 'Myth+'!	<== Log message
+
 		let now = new Date();
 		var timeonly = this.pad(now.getHours()) + ':' + this.pad(now.getMinutes()) + ':' + this.pad(now.getSeconds()) + '.' + this.pad(now.getMilliseconds(), 3);
 		var fulltimestamp = now.getFullYear() + '.' + this.pad(now.getMonth() + 1) + "." + this.pad(now.getDate()) + " " + timeonly;

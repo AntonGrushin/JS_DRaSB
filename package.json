@@ -1,6 +1,6 @@
 {
   "name": "JS_DRaSB",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "This is a JavaScript Node.js Discord bot based on discord.js library that is meant to perform automatic recording of a discord channel and play music/sounds as a soundboard or a playlist bot.",
   "main": "bot.js",
   "scripts": {

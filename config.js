@@ -10,32 +10,124 @@
  *
  *  JS_DRaSB Copyright 2018 - Anton Grushin
  *
- *-=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=
+ *
  *        config.js
  *    Configuration file to store all the options that can be changed
  *    by users.
  *********************************************************************/
 module.exports = {
 
-	//TOKEN
-	token: "YourDiscordToken",
-	//ID of the server where you want this bot to function
-	guildId: "yourGuildId",
+	// ======== MAIN OPTIONS (SET THEM BEFORE USING THE BOT!) ========
 
-	// ======== BOT OPTIONS ========
+	//Discord bot token
+	token: "aaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbccccccccccccccccccccc0000000000000",
+
+	//ID of the server where you want this bot to function
+	guildId: "000000000000000000",
+
+	//Enable soundboard features
+	EnableSoundboard: true,
+
+	//Enable automatic voice recording
+	EnableRecording: true,
+
+	//Command channel ID also being used as channel where bot will send informational and playback status messages
+	ReportChannelId: "000000000000000000",
+
+
+
+	// ======== COMMAND AND MESSAGE OPTIONS ========
+
+	//Command character or starting sequence of characters
+	CommandCharacter: "!",
+
+	//Strict commands for audio files. True: if more than one file was found, it will give an error. False: it will play first found file.
+	StrictAudioCommands: false,
+
+	//Delete user's command on the command channel
+	DeleteUserCommands: true,
+
+	//React only to commands on 'ReportChannelId' channel
+	RestrictCommandsToSingleChannel: false,
+
+	//If RestrictCommandsToSingleChannel is true: Allow reacting to commands in private chat (DM). If RestrictCommandsToSingleChannel is false: not used.
+	ReactToDMCommands: true,
+
+	//Send Playback Status Messages to 'ReportChannelId' channel (must be set)
+	PlaybackStatusMessagesSend: true,
+
+	//Delete informational messages (quick replies to user messages about wrong typed commands or unavaliability of certain audios)
+	InfoMessagesDelete: true,
+
+	//Time to wait before deleting informational messages (seconds)
+	InfoMessagedDeleteTimeout: 30,
+
+	//Limit Youtube video titles to this amount of characters
+	YoutubeTitleLengthLimit: 60,
+
+	//Tag people in Playback Status messages (if false will type their name instead of tag)
+	PlaybackStatusMessagesTagPeople: true,
+
+	// ======== RECORDING OPTIONS ========
+
+	//Save recorded using this audio codec (ffmpeg format, check avaliable list: https://ffmpeg.org/ffmpeg-codecs.html#Audio-Encoders)
+	RecordingAudioCodec: 'libmp3lame',
+	//Bitrate of 'RecordingAudioCodec' format
+	RecordingAudioBitrate: '128k',
+	//Data Container (file extension)
+	RecordingAudioContainer: 'mp3',
+
+	// ======== SOUND AND VOICE CHANNEL OPTIONS ========
+
+	//Global volume limiter, this amount will be considered as 100% when using 'volume' command
+	VolumeBotGlobal: 20.0,
 
 	//Bot will automatically join a room with 'AutoJoinMembersAmount' or more members
 	AutoJoinTalkingRoom: true,
+
 	//If this amount of members is reached in a voice channel, bot will automatically join it (if AutoJoinTalkingRoom == true)
-	AutoJoinMembersAmount: 1,
+	AutoJoinMembersAmount: 2,
+
 	//Automatically leave voice channel if there is no one left in the channel
 	AutoLeaveIfAlone: true,
+
 	//Switch channel if other voice room has more members than current one
-	SwitchVoiceRoomIfMoreMembers: true,
-	//Enable voice recording
-	EnableRecording: true,
-	
-	// FOLDERS. Acceptable format is one of these = relative to running folder: 'somefolder/insidefolder', absolute path: '/home/anton/superawesomesounds', relative to running folder: '../upperfolder'
+	SwitchVoiceRoomIfMoreMembers: false,
+
+	//Do we pause sound playback if its considered to be 'long' sound and some short one was requested to play and resume playing after short finished?
+	//true: if a 'long' sound is playing and someone requested to play a short file, it will be put on pause, short file played and then resume the long sound playback
+	//false: if a sound is playing and someone requested another sound, currently playing one will be stopped and new sound played
+	EnablePausingOfLongSounds: true,
+
+	//What duration of a sound file is considered to be long (in seconds).
+	LongSoundDuration: 10.0,
+
+	//Wait this amount of ms before playing next sound (if we play sounds too fast, some members of voice channel may not hear them)
+	SoundPlaybackWaitTimeMs: 20,
+
+	//How many times to send the voice packet to reduce packet loss
+	VoicePacketPasses: 2,
+
+	//Shall we use 'audioonly' filter when requesting data from YouTube? This will decrease brandwidth usage but will break resume function: all youtube will restart from the beginning after pausing
+	//  Warning: both methods may not work due to bug in ytdl 'begin' option: https://github.com/fent/node-ytdl-core/issues/219
+	UseAudioOnlyFilterForYoutube: true,
+
+	//If above is true, we can try using stream 'seek' function to start playing Youtube from certain position, but this will stream audio from the beginning as fast as possible 
+	// and only when desired position is reached will start the playback. May take a long time before audio starts playing, therefore we have to limit the time from which we start playback, so we wont wait for too long.
+	// (Used only when UseAudioOnlyFilterForYoutube is true) If youtube audio played for longer than this amount of seconds and was putted on pause, it will start from this position
+	YoutubeResumeTimeLimit: 20,
+
+	//How much time should we wait for youtube 'info' event before giving up (ms)
+	YoutubeInfoResponceTimeoutMs: 5000,
+
+	//Wait this amount of ms between channel joins (to prevent command flooding)
+	ChannelJoiningQueueWaitTimeMs: 1000,
+
+
+
+	// ======== FOLDERS ========
+
+	// Acceptable format is one of these = relative to running folder: 'somefolder/insidefolder', absolute path: '/home/anton/superawesomesounds', relative to running folder: '../upperfolder'
 	folders: {
 		//Voice recording folder
 		VoiceRecording: 'rec',
@@ -50,47 +142,36 @@ module.exports = {
 	},
 
 
-	// ========= PERFORMANCE =========
 
-	//Wait this amount of ms between channel joins (to prevent command flooding)
-	ChannelJoiningQueueWaitTimeMs: 2000,
+	// ======== LOGGING OPTIONS ========
 
 	logging: {
-		// SOUNDBOARD FUNCTIONS
-		//Write bot log to a file (true/false)
+
+		//Write bot log to a file
 		EnableFileLog: true,
+
 		//Name of the log file
 		LogFileName: 'soundboard.log',
-		//Report events to a channel
-		ChannelReportEnabled: true,
-		//Channel ID where to report playback events
-		ChannelReportId: '515851859584352260',
-
-		//What to report on that channel:
-		ChanReport: {
-			LocalFilesRequests: true,
-			YoutubeLinks: true,
-			FilesPlayErrors: true,
-
-		},
 
 		//What to report to console
 		ConsoleReport: {
 			ChannelJoiningLeaving: true,
 			MembersJoiningUpdating: true,
 			RecordDebugMessages: false,
-			ChannelDebugJoinQueue: true,
+			ChannelMembersCountDebug: true,
+			ChannelDebugJoinQueue: false,
 			RecFilesSavedAndProcessed: true,
+			SoundsPlaybackDebug: false,
 		},
 		//What to report to logfile (only works if it was reported to console first)
 		LogFileReport: {
 			ChannelJoiningLeaving: true,
 			MembersJoiningUpdating: true,
 			RecordDebugMessages: false,
-			ChannelDebugJoinQueue: true,
-			RecFilesSavedAndProcessed: true,
+			ChannelMembersCountDebug: true,
+			ChannelDebugJoinQueue: false,
+			RecFilesSavedAndProcessed: false,
+			SoundsPlaybackDebug: false,
 		}
-	}
-	
-
+	} 
 }
