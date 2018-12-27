@@ -151,10 +151,10 @@ module.exports = {
 				ffmpeg.ffprobe(path.resolve(__dirname, config.folders.Sounds, file), function (err, metadata) {
 					checkCount++;
 					if (err) {
-						utils.report("FFMPEG: Could not read properties of '" + file + "' file, ignoring it. Error: " + err, 'y');
+						//utils.report("FFMPEG: Could not read properties of '" + file + "' file, ignoring it. Error: " + err, 'y');
+						utils.report("FFMPEG: Could not read properties of '" + file + "' file, ignoring it.", 'y');
 					}
 					else {
-						//console.log("File '" + file + "', Duration " + metadata.format.duration + " sec, size " + Math.round(metadata.format.size / 1024) + " Kb.");
 						//Update the database record for this file
 						//File has record in the DB
 						if (!soundsDB[fileNameParse.name]) soundsDB[fileNameParse.name] = {};

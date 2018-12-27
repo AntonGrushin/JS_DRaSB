@@ -16,14 +16,14 @@ This is a Discord bot running on Node.js using discord.js library. It’s written 
 
 # Installation
 Bot requires [Node.js](https://nodejs.org/) with npm and [FFMPEG](https://www.ffmpeg.org/), to use npm automatic installation you will also need building tools for compilation.
-> **Tested on Linux Ubuntu 18.10 with Nodejs v8.11.4 and npm v5.8.0)**
+> **Tested on Linux Ubuntu 18.10 with Nodejs v8.11.4 and npm v5.8.0**
 
 First, install all dependencies
 ```sh
 sudo apt-get update
 sudo apt-get install nodejs npm ffmpeg build-essential
 ```
-Navigate to the folder where you want your bot to be installed and run (I'm using `/root/`), clone git repository and run npm automatic installation to install all the  libraries needed to run the bot (discord.js, node-opus, bufferutil, erlpack, fluent-ffmpeg and others).
+Navigate to the folder where you want your bot to be installed (I'm using `/root/`), clone git repository and run npm automatic installation to install all the  libraries needed to run the bot (discord.js, node-opus, bufferutil, erlpack, fluent-ffmpeg and others).
 ```sh
 cd /root/
 git clone https://github.com/AntonGrushin/JS_DRaSB.git

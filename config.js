@@ -39,7 +39,13 @@ module.exports = {
 	// ======== COMMAND AND MESSAGE OPTIONS ========
 
 	//Command character or starting sequence of characters
-	CommandCharacter: "!",
+	CommandCharacter: "?",
+
+	//Allow audio uploading throught direct messages
+	AcceptDirectMessagesAudio: true,
+
+	//Size limit for audio files accepted through direct messages (in Kb) or set it to 0 for unlimited size
+	MessageAttachmentSizeLimitKb: 0,
 
 	//Strict commands for audio files. True: if more than one file was found, it will give an error. False: it will play first found file.
 	StrictAudioCommands: false,
@@ -75,23 +81,23 @@ module.exports = {
 	//Bitrate of 'RecordingAudioCodec' format
 	RecordingAudioBitrate: '128k',
 	//Data Container (file extension)
-	RecordingAudioContainer: 'mp3',
+	RecordingAudioContainer: 'mp3', // <= NO DOT!
 
 	// ======== SOUND AND VOICE CHANNEL OPTIONS ========
 
 	//Global volume limiter, this amount will be considered as 100% when using 'volume' command
-	VolumeBotGlobal: 20.0,
+	VolumeBotGlobal: 70.0,
 
 	//Bot will automatically join a room with 'AutoJoinMembersAmount' or more members
 	AutoJoinTalkingRoom: true,
 
 	//If this amount of members is reached in a voice channel, bot will automatically join it (if AutoJoinTalkingRoom == true)
-	AutoJoinMembersAmount: 2,
+	AutoJoinMembersAmount: 1,
 
 	//Automatically leave voice channel if there is no one left in the channel
 	AutoLeaveIfAlone: true,
 
-	//Switch channel if other voice room has more members than current one
+	//Switch channel if other voice room has more members than current one (even if false, bot will switch channel in there is no one left in the current one)
 	SwitchVoiceRoomIfMoreMembers: false,
 
 	//Do we pause sound playback if its considered to be 'long' sound and some short one was requested to play and resume playing after short finished?
@@ -123,7 +129,15 @@ module.exports = {
 	//Wait this amount of ms between channel joins (to prevent command flooding)
 	ChannelJoiningQueueWaitTimeMs: 1000,
 
+	//List of audio formats that we accept as audio files without convertion if sent in DM (if AcceptDirectMessagesAudio is true)
+	AcceptedAudioFormats: ['mp3', 'ac3', 'opus', 'aac'],
 
+	//In case sent file does not fit into above formats, shall we convert it?
+	ConvertUploadedAudioFiles: true,
+
+	ConvertUploadedAudioCodec: 'libmp3lame',
+	ConvertUploadedAudioBitrate: '240k',
+	ConvertUploadedAudioContainer: 'mp3', // <= NO DOT!
 
 	// ======== FOLDERS ========
 
@@ -155,23 +169,27 @@ module.exports = {
 
 		//What to report to console
 		ConsoleReport: {
+			//join and leave of the bot
 			ChannelJoiningLeaving: true,
+			//Members joining the guild
 			MembersJoiningUpdating: true,
+			MembersJoinLeaveVoice: true,
 			RecordDebugMessages: false,
-			ChannelMembersCountDebug: true,
 			ChannelDebugJoinQueue: false,
-			RecFilesSavedAndProcessed: true,
-			SoundsPlaybackDebug: false,
+			RecFilesSavedAndProcessed: false,
+			SoundsPlaybackDebug: true,
+			DelayDebug: true,
 		},
 		//What to report to logfile (only works if it was reported to console first)
 		LogFileReport: {
 			ChannelJoiningLeaving: true,
 			MembersJoiningUpdating: true,
+			MembersJoinLeaveVoice: true,
 			RecordDebugMessages: false,
-			ChannelMembersCountDebug: true,
 			ChannelDebugJoinQueue: false,
 			RecFilesSavedAndProcessed: false,
 			SoundsPlaybackDebug: false,
+			DelayDebug: true,
 		}
 	} 
 }

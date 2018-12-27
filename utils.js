@@ -19,6 +19,9 @@ const fs = require('fs');
 const config = require('./config.js');
 const path = require('path');
 const mkdirp = require('mkdirp');
+const ffmpeg = require('fluent-ffmpeg');
+//technical
+var timings = {};
 
 module.exports = {
 
@@ -47,6 +50,81 @@ module.exports = {
 		return (now.getFullYear() + '-' + this.pad(now.getMonth() + 1) + "-" + this.pad(now.getDate()) + "_" + timeonly);
 	},
 
+	// Delete file
+	deleteFile: function (dest) {
+		fs.unlink(dest, err => {
+			if (err)
+				this.report("Could't delete file '" + dest + "'. Error: " + err, 'r');
+		});
+	},
+
+	// Move file
+	moveFile: function (from, to, deleteIfFails=true) {
+		return new Promise((resolve, reject) => {
+			fs.rename(from, to, err => {
+				if (err) {
+					this.report("Could't move file from '" + from + "' to '" + to + "'. Error: " + err, 'r');
+					if (deleteIfFails)
+						this.deleteFile(from);
+					return reject(err);
+				}
+				else
+					return resolve();
+			});
+		});
+	},
+
+	// FFMPEG 
+
+	checkAudioFormat: function (filepath) {
+		return new Promise((resolve, reject) => {
+			ffmpeg.ffprobe(filepath, (err, metadata) => {
+				if (err)
+					return reject(err);
+				else {
+					//Check if the format
+					let countStreams = metadata.streams.length;
+					let foundStreamIndex = null;
+					let needToConvert = false;
+					let needToRemux = false;
+					if (countStreams > 1) needToRemux = true;
+					let lastAudioStream = null;
+					for (i in metadata.streams) {
+						//console.log("Stream " + i + ", codec name: '" + metadata.streams[i].codec_name + "', codec type: '" + metadata.streams[i].codec_type + "'")
+						//Check every stream if it fits the format
+						for (fInx in config.AcceptedAudioFormats) {
+							if (!foundStreamIndex && metadata.streams[i].codec_name == config.AcceptedAudioFormats[fInx] && metadata.streams[i].codec_type == 'audio') {
+								foundStreamIndex = i;
+							}
+						}
+						if (metadata.streams[i].codec_type == 'audio')
+							lastAudioStream = i;
+					}
+					let result = { 'metadata': metadata };
+
+					//If we found the proper format, no need to convert
+					if (foundStreamIndex != null && !needToRemux) {
+						result['mode'] = "fits";
+					}
+					//If format did fit, but we need to remux it because of several streams
+					else if (foundStreamIndex != null && needToRemux) {
+						result['mode'] = "remux";
+						result['remuxStreamToKeep'] = foundStreamIndex;
+					}
+					//If format didnt fit but its an audio, convert it
+					else if (foundStreamIndex == null && lastAudioStream != null) {
+						result['mode'] = "convert";
+						result['audioStream'] = lastAudioStream;
+					}
+					//If we didnt find an audio, the file is not acceptable
+					else {
+						result['mode'] = "none";
+					}
+					return resolve(result);
+				}
+			});
+		});
+	},
 
 	// ========= LOGGING =========
 
@@ -105,5 +183,26 @@ module.exports = {
 		return allFolersAreReady;
 	},
 
+	sanatizeCommandName: function (name) {
+		return path.parse(name).name.toLowerCase().replace(/[^a-z0-9_.]/g, '')
+	}, 
+	//Debug function to count milliseconds
+	msCount: function (name, mode="normal",) {
+		/* timings structure:
+			{ "time1":[5555555, 5555556, 5555557],
+			  "simething2":[6666666, 6666667, 6666668]  }
+		*/
+		let now = Date.now();
+		if (!timings[name] || mode=="start") {
+			timings[name] = [now];
+			return "Delay debugging '" + name + "': Starting...";
+		}
+		timings[name].push(now);
+		let delay = now - timings[name][timings[name].length - 2];
+		let totalDelay = now - timings[name][0];
+		if (mode == 'reset' && timings[name])
+			delete timings[name];
+		return "Delay debugging '" + name + "': " + delay + " ms since last operation, (" + totalDelay+" ms total).";
+	},
 
 }
