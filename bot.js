@@ -21,6 +21,7 @@ const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const https = require('https');
+//const { PassThrough } = require('stream')  //For piping file stream to ffmpeg
 
 //Load bot parts
 const config = require('./config.js');
@@ -187,6 +188,9 @@ function startRecording(connection) {
 			connection.on('speaking', (user, speaking) => {
 				if (speaking) {
 
+					//check if we have any recievers for this user yet
+					
+
 					const audioStream = receiver.createPCMStream(user);
 					let chunkCount = 0;
 					let totalStreamSize = 0;
@@ -205,9 +209,9 @@ function startRecording(connection) {
 						
 						//Each chunk is 20 ms
 						let durationMs = chunkCount * 20;
-						if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("Got " + chunkCount + " chunks with total size of " + totalStreamSize + " bytes from user '" + user.username + "'.", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
+						if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("Got " + chunkCount + " chunks with total size of " + totalStreamSize + " bytes from user '" + getUserName(user) + "'.", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
 
-						let outputFile = path.resolve(__dirname, config.folders.VoiceRecording, fileTimeNow + '_' + utils.cutFillString(user.id, 20) + '_' + utils.cutFillString(durationMs, 10, '0') + '_' + utils.sanitizeFilename(user.username) + '.' + config.RecordingAudioContainer)
+						let outputFile = path.resolve(__dirname, config.folders.VoiceRecording, fileTimeNow + '_' + utils.cutFillString(user.id, 20) + '_' + utils.cutFillString(durationMs, 10, '0') + '_' + utils.sanitizeFilename(getUserName(user)) + '.' + config.RecordingAudioContainer)
 						ffmpeg(tempfile + '.pcm')
 							.inputOptions([
 								'-f', 's16le',
@@ -233,7 +237,8 @@ function startRecording(connection) {
 							.run();
 					});
 				}
-			});
+			})
+			connection.on('error', (err) => utils.report("There was an error in voice connection: " + err, 'r'));
 
 			return resolve(dispatcher);
 		});
@@ -383,16 +388,35 @@ function addToQueue(soundToPlay, method = 'append') {
 function attachEventsOnPlayback(connection) {
 	//What to do in the end of the playback
 	connection.dispatcher.on('end', (reason) => {
-		if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("Finished playing! Reason: " + reason.replace(/(\r\n\t|\n|\r\t)/gm, ""), 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
+		checkedDataStart = null;
+		if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("Finished playing! Reason: " + reason, 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
 		soundIsPlaying = false;
 		handleQueue(reason);
 		LastPlaybackTime = Date.now();
+
+		//
 	});
 	connection.dispatcher.on('start', () => {
-		if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback", 'reset') + " Started playing!.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+		//For debugging responce timings
+		if (config.logging.ConsoleReport.DelayDebug) {
+			utils.report(utils.msCount("Playback") + " Started playing!.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+		} 
+
 		if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("Started playing!", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
 		PreparingToPlaySound = false;
 		soundIsPlaying = true;
+	});
+	connection.dispatcher.on('debug', (message) => {
+		//For debugging responce timings
+		if (config.logging.ConsoleReport.DelayDebug) {
+			utils.report(utils.msCount("Playback", 'reset') + " Dispatcher debug: " + message, 'c', config.logging.LogFileReport.DelayDebug); //debug message
+		}
+	});
+	connection.on('debug', (message) => {
+		//For debugging responce timings
+		if (config.logging.ConsoleReport.DelayDebug) {
+			utils.report(utils.msCount("Playback", 'reset') + " Connection debug: " + message, 'c', config.logging.LogFileReport.DelayDebug); //debug message
+		}
 	});
 	connection.dispatcher.on('error', (error) => {
 		if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback", 'reset') + " Error playing!.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
@@ -419,14 +443,18 @@ function playQueue(connection) {
 				let inputObject = PlayingQueue.shift();
 				if (inputObject.type == 'file') {
 					if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("inputObject.type PASSED", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
-					CurrentPlayingSound = { 'type': 'file', 'path': path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), 'filename': inputObject.filename, 'duration': db.getSoundDuration(inputObject.filename), 'bitrate': db.getSoundBitrate(inputObject.filename), 'user': inputObject.user };
+					CurrentPlayingSound = { 'type': 'file', 'path': path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), 'filename': inputObject.filename, 'duration': db.getSoundDuration(inputObject.filename), 'bitrate': db.getSoundBitrate(inputObject.filename), 'user': inputObject.user, 'flags': inputObject.flags };
 					if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
-					CurrentVolume = calcVolumeToSet(db.getUserVolume(inputObject.user.id));
+					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
 					let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-					let dispatcher = connection.playFile(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), PlaybackOptions);
+					//let dispatcher = connection.playFile(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), PlaybackOptions);
+					//let stream = fs.createReadStream(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)));
 
+					let ffstream = utils.processStream(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), inputObject.flags);
+					connection.playConvertedStream(ffstream, PlaybackOptions);
+					
 					playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`, duration " + humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
 					//Attach event listeners
 					attachEventsOnPlayback(connection);
@@ -439,6 +467,7 @@ function playQueue(connection) {
 					// sometimes its not working
 					if (inputObject.played && inputObject.played > 7000 && !config.UseAudioOnlyFilterForYoutube) YtOptions['begin'] = Math.floor(inputObject.played / 1000) + "s";
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " creating stream... for '" + inputObject["link"]+"'", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+
 					//Create the stream
 					let stream = ytdl(inputObject["link"], YtOptions)
 					stream.on('info', (videoInfo, videoFormat) => {
@@ -447,7 +476,7 @@ function playQueue(connection) {
 						CurrentPlayingSound.title = videoInfo['title'];
 						CurrentPlayingSound.duration = videoInfo['length_seconds'];
 						if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
-						CurrentVolume = calcVolumeToSet(db.getUserVolume(inputObject.user.id));
+						CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
 						let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 						if (inputObject.played && config.UseAudioOnlyFilterForYoutube) {
 							if (inputObject.played / 1000 <= config.YoutubeResumeTimeLimit)
@@ -455,7 +484,39 @@ function playQueue(connection) {
 							else
 								PlaybackOptions['seek'] = config.YoutubeResumeTimeLimit;
 						}
-						let dispatcher = connection.playStream(stream, PlaybackOptions);
+
+						let ffstream = utils.processStream(stream, inputObject.flags);
+						connection.playConvertedStream(ffstream, PlaybackOptions);
+						
+						/*if (inputObject.flags.effects) {
+							let command = ffmpeg(stream);
+							command = utils.addAudioEffects(command, inputObject.flags.effects);
+							const ffstream = new PassThrough();
+							command.audioCodec('libmp3lame')
+								.audioBitrate('320k')
+								.format('mp3')
+								.on('error', function (err) {
+									utils.report("ffmpeg reported error: " + err, 'r');
+									if (ffstream)
+										ffstream.end();
+								})
+								.on('end', function (stdout, stderr) {
+									//if (stream)
+									//	stream.close();
+									if (ffstream)
+										ffstream.end();
+								})
+								.on('start', function (commandLine) {
+									console.log('Spawned Ffmpeg with command: ' + commandLine);
+								})
+								.pipe(ffstream);
+							connection.playStream(ffstream, PlaybackOptions);
+						}
+						else
+							connection.playStream(stream, PlaybackOptions);*/
+						
+
+						
 						playbackMessage(":musical_note: Playing Youtube `" + CurrentPlayingSound.title.substring(0, config.YoutubeTitleLengthLimit) + "` (duration " + humanTime(CurrentPlayingSound.duration) + "). Requested by " + getUserTagName(CurrentPlayingSound.user) + ". <" + CurrentPlayingSound.link + ">");
 						//Attach event listeners
 						attachEventsOnPlayback(connection);
@@ -463,11 +524,16 @@ function playQueue(connection) {
 					});
 					stream.on('error', error => {
 						utils.report('Couldnt download video! Reason: ' + error, 'r');
+						if (stream)
+							stream.end();
 					});
 					//In case something goes wrong and we never get 'info' event, we need to set variables back to normal
 					setTimeout(() => {
-						if (!recievedInfo && PreparingToPlaySound)
+						if (!recievedInfo && PreparingToPlaySound) {
 							PreparingToPlaySound = false;
+							if (stream)
+								stream.end();
+						}
 					}, config.YoutubeInfoResponceTimeoutMs);
 				}
 				else {
@@ -519,6 +585,10 @@ client.on('ready', () => {
 	utils.report('Logged in as ' + client.user.tag + '!', 'g');
 	BotReady = true;
 });
+/*client.on('debug', (message) => {
+	utils.report('DDebug: ' + message, 'w');
+	BotReady = true;
+});*/
 client.on('reconnecting', () => {
 	utils.report("Trying to reconnect... ", 'y');
 	BotReady = false;
@@ -619,6 +689,8 @@ client.on('message', async message => {
 			//If its a command
 			if (message.content.substring(0, config.CommandCharacter.length) == config.CommandCharacter) {
 				let args = message.content.substring(config.CommandCharacter.length).split(' ');
+				let additionalFlags = utils.readFlags(message.content);
+				//let additionalFlags = {};
 				let command = args[0];
 				args = args.splice(1);
 
@@ -844,7 +916,7 @@ client.on('message', async message => {
 											else {
 												playbackMessage(":arrow_right: " + getUserTagName(message.author) + " added Youtube link to the queue: `" + info['title'].substring(0, config.YoutubeTitleLengthLimit) + "` (duration " + humanTime(info['length_seconds']) + "). <" + args[0] + ">");
 												//Create Queue element
-												QueueElement = { 'type': 'youtube', 'link': args[0], 'title': info['title'], 'video_id': info['video_id'], 'user': guildMember, 'duration': info['length_seconds'], 'loudness': info['loudness'] };
+												QueueElement = { 'type': 'youtube', 'link': args[0], 'title': info['title'], 'video_id': info['video_id'], 'user': guildMember, 'duration': info['length_seconds'], 'loudness': info['loudness'], 'flags': additionalFlags };
 												//Add to the queue
 												PlayingQueue.push(QueueElement);
 											}
@@ -861,7 +933,7 @@ client.on('message', async message => {
 												return a.localeCompare(b);
 											})
 											//Create Queue element
-											QueueElement = { 'type': 'file', 'filename': foundOrdered[0], 'user': guildMember, 'duration': db.getSoundDuration(foundOrdered[0]) };
+											QueueElement = { 'type': 'file', 'filename': foundOrdered[0], 'user': guildMember, 'duration': db.getSoundDuration(foundOrdered[0]), 'flags': additionalFlags };
 											//Add to the queue
 											PlayingQueue.push(QueueElement);
 										}
@@ -898,7 +970,7 @@ client.on('message', async message => {
 												.then((connection) => {
 													if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("YouTubeCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 													//Create Queue element
-													QueueElement = { 'type': 'youtube', 'link': args[0], 'user': guildMember };
+													QueueElement = { 'type': 'youtube', 'link': args[0], 'user': guildMember, 'flags': additionalFlags };
 													//If something is playing right now
 													if (soundIsPlaying) {
 														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("YouTubeCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
@@ -946,7 +1018,7 @@ client.on('message', async message => {
 														return a.localeCompare(b);
 													});
 													//Create Queue element
-													QueueElement = { 'type': 'file', 'filename': foundOrdered[0], 'user': guildMember, 'duration': db.getSoundDuration(foundOrdered[0]) };
+													QueueElement = { 'type': 'file', 'filename': foundOrdered[0], 'user': guildMember, 'duration': db.getSoundDuration(foundOrdered[0]), 'flags': additionalFlags };
 
 													//If something is playing right now
 													if (soundIsPlaying) {

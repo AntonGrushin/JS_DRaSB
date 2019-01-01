@@ -86,13 +86,13 @@ module.exports = {
 	// ======== SOUND AND VOICE CHANNEL OPTIONS ========
 
 	//Global volume limiter, this amount will be considered as 100% when using 'volume' command
-	VolumeBotGlobal: 70.0,
+	VolumeBotGlobal: 100.0,
 
 	//Bot will automatically join a room with 'AutoJoinMembersAmount' or more members
 	AutoJoinTalkingRoom: true,
 
 	//If this amount of members is reached in a voice channel, bot will automatically join it (if AutoJoinTalkingRoom == true)
-	AutoJoinMembersAmount: 1,
+	AutoJoinMembersAmount: 2,
 
 	//Automatically leave voice channel if there is no one left in the channel
 	AutoLeaveIfAlone: true,
@@ -106,7 +106,7 @@ module.exports = {
 	EnablePausingOfLongSounds: true,
 
 	//What duration of a sound file is considered to be long (in seconds).
-	LongSoundDuration: 10.0,
+	LongSoundDuration: 15.0,
 
 	//Wait this amount of ms before playing next sound (if we play sounds too fast, some members of voice channel may not hear them)
 	SoundPlaybackWaitTimeMs: 20,
@@ -153,6 +153,8 @@ module.exports = {
 		Database: 'database',
 		//Folder where we store uploaded soundfiles for soundboard
 		Sounds: 'sounds',
+		//Folder for Impulse Response filters
+		SoundFilters: 'soundfilters' 
 	},
 
 
@@ -177,8 +179,8 @@ module.exports = {
 			RecordDebugMessages: false,
 			ChannelDebugJoinQueue: false,
 			RecFilesSavedAndProcessed: false,
-			SoundsPlaybackDebug: true,
-			DelayDebug: true,
+			SoundsPlaybackDebug: false,
+			DelayDebug: false,
 		},
 		//What to report to logfile (only works if it was reported to console first)
 		LogFileReport: {
@@ -189,7 +191,7 @@ module.exports = {
 			ChannelDebugJoinQueue: false,
 			RecFilesSavedAndProcessed: false,
 			SoundsPlaybackDebug: false,
-			DelayDebug: true,
+			DelayDebug: false,
 		}
 	} 
 }
