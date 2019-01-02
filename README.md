@@ -54,7 +54,7 @@ node bot.js
 ```
 That’s it! It's running now!
 To detach from screen session, use `Ctrl+A`, then `D`. If you want to reattach running bot session use same command ```screen -aAxR -S jsdrasb```
-To upload sond files to the bot you can either put them into 'sounds' foler or send them in Direct Message as an attachment. If audio format is unsupported it will be automatically converted. If its a video file, it will cut and save only audio from it.
+To upload sound files to the bot you can either put them into 'sounds' foler or send them in Direct Message as an attachment. If audio format is unsupported it will be automatically converted. If its a video file, it will cut and save only audio from it.
 
 # Commands
 Default command character is `?`, all commands should start with it, but you can change it to anything in [config.js]( https://github.com/AntonGrushin/JS_DRaSB/blob/master/config.js) file.
@@ -89,10 +89,11 @@ Examples:
 |`vibrato` [frequency] [scale] (or `vib`, `cry`)| Adds vibration with desired frequency in Hz and influence percentage scale. Default is 10 Hz and 50%|
 |`echo`|Add echo|
 |`pot`|Like it sounds from a pot|
-|`telephone` (or `phone`)|Sound throgh a phone|
-|`tube`|Sound through a wacuumcleaner tube|
+|`telephone` (or `phone`)|Sound through a phone|
+|`tube`|Sound through a vacuum cleaner tube|
 |`bath`|Sound through iron bath|
 |`can`|Sound through a can|
-|`iron`|Irony sound|
+|`iron`|Ironish sound|
 |`horn`|Through a horn|
+
 You don't have to specify number after the effect or can specify just first one.
