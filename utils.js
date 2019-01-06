@@ -21,8 +21,30 @@ const path = require('path');
 const mkdirp = require('mkdirp');
 const ffmpeg = require('fluent-ffmpeg');
 const { PassThrough } = require('stream')  //For piping file stream to ffmpeg
+
 //technical
 var timings = {};
+
+//Class to combine ffmpeg complex filters together
+class complexFilterBuild {
+	constructor() {
+		this.iteration = 0;
+		this.output = [];
+		this.endresult = "";
+	}
+
+	addFilter(filter, input = null) {
+		let inputSource = "";
+		if (!input && this.iteration == 0)
+			inputSource = "[0:a]";
+		else if (input)
+			inputSource = input;
+		else
+			inputSource = "[s" + this.iteration + "]";
+		this.output.push(inputSource + filter + "[s" + (++this.iteration) + "]");
+		this.endresult = "s" + this.iteration;
+	}
+}
 
 module.exports = {
 
@@ -124,7 +146,7 @@ module.exports = {
 				 [ 'vibrato', 12, 50 ],
 				 [ 'chorius' ],
 				 [ 'pitch', -40 ],
-				 [ 'echo' ] ] }   */
+				 [ 'afir', 'echo' ] ] }   */
 
 		//Volume
 		let volResult = inString.match(/[ ]+(?:v|vol|volume|loud|loudness)[ ]{0,}([0-9.]+)/);
@@ -191,6 +213,26 @@ module.exports = {
 		return output;
 	},
 
+	//Report filters into a string
+	flagsToString: function (flags) {
+		console.log("effects!");
+		let out = "";
+		if (Object.keys(flags).length > 0) {
+			if (flags['effects']) {
+				out = " with effects: ";
+				for (i in flags['effects']) {
+					if (flags['effects'][i][0] == 'afir') {
+						out += "*" +flags['effects'][i][1] + '*, ';
+					}
+					else
+						out += "*"+flags['effects'][i][0] + (flags['effects'][i][1] ? " " + flags['effects'][i][1] : "") + (flags['effects'][i][2] ? " " + flags['effects'][i][2] : "") + '*, ';
+				}
+				out = out.slice(0, out.length - 2); //remove ', ' from the end
+			}
+		}
+		return out;
+	},
+
 	// FFMPEG 
 
 	checkAudioFormat: function (filepath) {
@@ -212,6 +254,7 @@ module.exports = {
 						for (fInx in config.AcceptedAudioFormats) {
 							if (!foundStreamIndex && metadata.streams[i].codec_name == config.AcceptedAudioFormats[fInx] && metadata.streams[i].codec_type == 'audio') {
 								foundStreamIndex = i;
+								break;
 							}
 						}
 						if (metadata.streams[i].codec_type == 'audio')
@@ -246,42 +289,51 @@ module.exports = {
 	//Add all effects from the list to ffmpeg command
 	addAudioEffects: function (ffmpegCommand, effects) {
 		let newCommand = ffmpegCommand;
-		let complexFilters = [];
+		let filterBuilder = new complexFilterBuild();
+		//First, add IR inputs and 'anullsrc' silence input for afir filter (can be only one)
+		for (i in effects) {
+			if (effects[i][0] == 'afir') {
+				if (effects[i][1] == 'echo')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
+				else if (effects[i][1] == 'pot')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+				else if (effects[i][1] == 'telephone')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+				else if (effects[i][1] == 'tube')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+				else if (effects[i][1] == 'bath')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+				else if (effects[i][1] == 'can')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+				else if (effects[i][1] == 'iron')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+				else if (effects[i][1] == 'horn')
+					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+
+				//Concat source and silence input
+				filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
+				break;
+			}
+		}
+		//Add effects to complexFilterBuild Class
 		for (i in effects) {
 			if (effects[i][0] == 'pitch') {
 				let speed = (1 - effects[i][1] / 100);
 				if (speed < 0.5)
 					speed = 0.5;
-				complexFilters.push('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
+				//complexFilters.push('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
+				filterBuilder.addFilter('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
 			}
 			else if (effects[i][0] == 'vibrato')
-				complexFilters.push('vibrato=' + effects[i][1] + ':' + (effects[i][2] / 100));
+				filterBuilder.addFilter('vibrato=' + effects[i][1] + ':' + (effects[i][2] / 100));
 			else if (effects[i][0] == 'chorius')
-				complexFilters.push('chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3');
+				filterBuilder.addFilter('chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3');
 			else if (effects[i][0] == 'afir') {
-				if (effects[i][1] == 'echo')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav'));
-				else if (effects[i][1] == 'pot')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav'));
-				else if (effects[i][1] == 'telephone')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav'));
-				else if (effects[i][1] == 'tube')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav'));
-				else if (effects[i][1] == 'bath')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav'));
-				else if (effects[i][1] == 'can')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav'));
-				else if (effects[i][1] == 'iron')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav'));
-				else if (effects[i][1] == 'horn')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav'));
-				
-				newCommand = newCommand.outputOptions(['-lavfi', 'afir']);
-				//newCommand = newCommand.audioFilters('afir');
+				filterBuilder.addFilter('afir');
 			}
 		}
-		if (complexFilters.length > 0)
-			newCommand = newCommand.complexFilter(complexFilters);
+		if (filterBuilder.output.length > 0)
+			newCommand = newCommand.complexFilter(filterBuilder.output).outputOptions('-map', "["+filterBuilder.endresult+"]");
 		return newCommand;
 	},
 
@@ -299,7 +351,7 @@ module.exports = {
 		if (opusBitrate)
 			command = command.format('s16le');
 		else
-			command = command.format('s16le');
+			command = command.format('s16le').audioChannels(2).audioFrequency(48000);
 			command
 			.on('error', function (err) {
 				self.report("ffmpeg reported error: " + err, 'r');
@@ -313,7 +365,7 @@ module.exports = {
 				//	ffstream.end();
 			})
 			.on('start', function (commandLine) {
-				console.log('Spawned Ffmpeg with command: ' + commandLine);
+				if (config.logging.ConsoleReport.FfmpegDebug) self.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
 			})
 			.pipe(ffstream);
 		return ffstream;
@@ -399,4 +451,5 @@ module.exports = {
 		return "Delay debugging '" + name + "': " + delay + " ms since last operation, (" + totalDelay+" ms total).";
 	},
 
+	
 }

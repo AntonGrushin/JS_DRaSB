@@ -77,11 +77,11 @@ module.exports = {
 	// ======== RECORDING OPTIONS ========
 
 	//Save recorded using this audio codec (ffmpeg format, check avaliable list: https://ffmpeg.org/ffmpeg-codecs.html#Audio-Encoders)
-	RecordingAudioCodec: 'libmp3lame',
+	RecordingAudioCodec: 'libopus',
 	//Bitrate of 'RecordingAudioCodec' format
-	RecordingAudioBitrate: '128k',
+	RecordingAudioBitrate: '96k',
 	//Data Container (file extension)
-	RecordingAudioContainer: 'mp3', // <= NO DOT!
+	RecordingAudioContainer: 'ogg', // <= NO DOT!
 
 	// ======== SOUND AND VOICE CHANNEL OPTIONS ========
 
@@ -93,6 +93,9 @@ module.exports = {
 
 	//If this amount of members is reached in a voice channel, bot will automatically join it (if AutoJoinTalkingRoom == true)
 	AutoJoinMembersAmount: 2,
+
+	//Count only human accounts in 'AutoJoinMembersAmount' (ignore bots connected to voice channels)
+	VoiceChannelIgnoreBotsCount: true,
 
 	//Automatically leave voice channel if there is no one left in the channel
 	AutoLeaveIfAlone: true,
@@ -106,10 +109,10 @@ module.exports = {
 	EnablePausingOfLongSounds: true,
 
 	//What duration of a sound file is considered to be long (in seconds).
-	LongSoundDuration: 15.0,
+	LongSoundDuration: 10.0,
 
 	//Wait this amount of ms before playing next sound (if we play sounds too fast, some members of voice channel may not hear them)
-	SoundPlaybackWaitTimeMs: 20,
+	SoundPlaybackWaitTimeMs: 5,
 
 	//How many times to send the voice packet to reduce packet loss
 	VoicePacketPasses: 2,
@@ -129,7 +132,7 @@ module.exports = {
 	//Wait this amount of ms between channel joins (to prevent command flooding)
 	ChannelJoiningQueueWaitTimeMs: 1000,
 
-	//List of audio formats that we accept as audio files without convertion if sent in DM (if AcceptDirectMessagesAudio is true)
+	//List of audio formats that we accept as audio files without convertion if sent in DM (if AcceptDirectMessagesAudio is true) If it fits, container will be the same
 	AcceptedAudioFormats: ['mp3', 'ac3', 'opus', 'aac'],
 
 	//In case sent file does not fit into above formats, shall we convert it?
@@ -181,6 +184,7 @@ module.exports = {
 			RecFilesSavedAndProcessed: false,
 			SoundsPlaybackDebug: false,
 			DelayDebug: false,
+			FfmpegDebug: false,
 		},
 		//What to report to logfile (only works if it was reported to console first)
 		LogFileReport: {
@@ -192,6 +196,7 @@ module.exports = {
 			RecFilesSavedAndProcessed: false,
 			SoundsPlaybackDebug: false,
 			DelayDebug: false,
+			FfmpegDebug: false,
 		}
 	} 
 }

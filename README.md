@@ -66,7 +66,7 @@ Default command character is `?`, all commands should start with it, but you can
 * `volume [percent]`  (or `v`, `vol`, `loudness`) Will change you personal volume level to desired value. If something is playing right now: will also change the volume of currently playing audio. 
 Example: `v 30` will change volume to 30%. *Mind that 100% here is the value set in __VolumeBotGlobal__ [config.js]( https://github.com/AntonGrushin/JS_DRaSB/blob/master/config.js). If VolumeBotGlobal is set to 50.0, 100% here will be only half of the volume.*
 * `stop` (or `cancel`, `end`) Stops the playback and cleans the entire queue.
-* `queue [file/link]` (or `q`, `add`, `addnext`) Add file or YouTube link to the queue. If something if playing right now it will automatically astart after current audio, if not, you will have to use `play` command to start it.
+* `queue [file/link]` (or `q`, `add`, `addnext`) Add file or YouTube link to the queue. If something if playing right now it will automatically start after current audio, if not, you will have to use `play` command to start it.
 * `skip` (or `next`) Play next audio in the queue.
 * `yt [link]` (or `youtube`) Play audio from a YouTube link.
 * `[filename]` Play local audio file. Use `list` command to see all current files. Can use partial name.

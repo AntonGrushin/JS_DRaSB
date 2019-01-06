@@ -147,40 +147,40 @@ module.exports = {
 			let checkCount = 0;
 			files.forEach(file => {
 				let fileNameParse = path.parse(file);
-				//console.log(file);
-				ffmpeg.ffprobe(path.resolve(__dirname, config.folders.Sounds, file), function (err, metadata) {
-					checkCount++;
-					if (err) {
-						//utils.report("FFMPEG: Could not read properties of '" + file + "' file, ignoring it. Error: " + err, 'y');
-						utils.report("FFMPEG: Could not read properties of '" + file + "' file, ignoring it.", 'y');
-					}
-					else {
-						//Update the database record for this file
-						//File has record in the DB
-						if (!soundsDB[fileNameParse.name]) soundsDB[fileNameParse.name] = {};
-						soundsDB[fileNameParse.name]['extension'] = fileNameParse.ext;
-						if (metadata.format) {
-							soundsDB[fileNameParse.name]['duration'] = metadata.format.duration;
-							soundsDB[fileNameParse.name]['size'] = metadata.format.size;
-							soundsDB[fileNameParse.name]['bitrate'] = metadata.format.bit_rate;
-						}
-						soundsDB[fileNameParse.name]['checked'] = true;
-					}
-					//If we checked all the files, launch database cleanup
-					if (checkCount == files.length) {
-						utils.report("Found " + checkCount + " sound files! Updating the database...", 'g');
-						for (var key in soundsDB) {
-							if (!soundsDB[key]['checked']) {
-								delete soundsDB[key];
-								utils.report("Deleting sounds DB record '" + key + "', file does not exists anymore.", 'y');
+				let fileToCheck = path.resolve(__dirname, config.folders.Sounds, file);
+				utils.checkAudioFormat(fileToCheck)
+					.then(result => {
+						checkCount++;
+						if (result['mode'] != 'none') {
+							//Update the database record for this file
+							//File has record in the DB
+							if (!soundsDB[fileNameParse.name]) soundsDB[fileNameParse.name] = {};
+							soundsDB[fileNameParse.name]['extension'] = fileNameParse.ext;
+							if (result['metadata'].format) {
+								soundsDB[fileNameParse.name]['duration'] = result['metadata'].format.duration;
+								soundsDB[fileNameParse.name]['size'] = result['metadata'].format.size;
+								soundsDB[fileNameParse.name]['bitrate'] = result['metadata'].format.bit_rate;
 							}
-							else delete soundsDB[key]['checked'];
-
+							soundsDB[fileNameParse.name]['checked'] = true;
 						}
-						//update the database file
-						updateDBFile('sounds.json', soundsDB);
-					}
-				});
+
+						//If we checked all the files, launch database cleanup
+						if (checkCount == files.length) {
+							utils.report("Found " + checkCount + " sound files! Updating the database...", 'g');
+							for (var key in soundsDB) {
+								if (!soundsDB[key]['checked']) {
+									delete soundsDB[key];
+									utils.report("Deleting sounds DB record '" + key + "', file does not exists anymore.", 'y');
+								}
+								else delete soundsDB[key]['checked'];
+
+							}
+							//update the database file
+							updateDBFile('sounds.json', soundsDB);
+						}
+					})
+					.catch(err => utils.report("Couldn't execute ffprobe on '" + fileToCheck + "' file. Reason: " + err, 'y'));
+				
 			});
 		})
 	},
@@ -220,5 +220,17 @@ module.exports = {
 		return result;
 	}
 
-	// =========== YOUTUBE ===========
+	// =========== VOICE RECORDINGS ===========
+	/* DB structure
+		'filename': {
+			'UserId': 'mp3'
+			'startTime': 100.0,
+			'duration': 0,
+			'endTime': 0,
+			'playedCount': 0,
+			'uploadedBy': "000000000000000000",
+			'uploadDate': 0,
+
+		}                                 */
+
 }

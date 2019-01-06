@@ -14,19 +14,22 @@
  *        bot.js
  *    Main bot executable.
  *********************************************************************/
-const Discord = require('discord.js');
-const client = new Discord.Client();
+var Discord = require('discord.js');
 const ytdl = require('ytdl-core');
 const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const https = require('https');
 //const { PassThrough } = require('stream')  //For piping file stream to ffmpeg
+const client = new Discord.Client();
 
 //Load bot parts
 const config = require('./config.js');
 const utils = require('./utils.js');
 var db = require('./database.js');
+
+//Classes from DiscordJs for refreshing
+const AudioPlayer = require('discord.js/src/client/voice/player/AudioPlayer');
 
 //technical variables
 var BotReady = false; //This turns true when we are connected to Discord server
@@ -164,6 +167,43 @@ function getVoiceChannel(Member) {
 		return client.voiceConnections.array()[0].channel;
 }
 
+function prepareForPlaybackOnChannel(guildMember, permissionLevel = {}, joinStrict = false) {
+	return new Promise((resolve, reject) => {
+		if (guildMember.voiceChannel || client.voiceConnections.size) {
+			if (getVoiceChannel(guildMember).joinable) {
+				checkChannelJoin(getVoiceChannel(guildMember))
+					.then((connection) => { return resolve(connection, null); })
+					.catch(error => {
+						utils.report("Couldn't join channel. Error: " + error, 'r');
+						return resolve(null, error);
+					});
+			}
+			else {
+				sendInfoMessage("I dont have permission to join that channel!", message.channel, message.author);
+				return resolve(null, true);
+			}
+		}
+		else {
+			sendInfoMessage("Join a voice channel first!", message.channel, message.author);
+			return resolve(null, true);
+		}
+	});
+}
+
+//Recreate Player to avoid buffer overloading and as a result delayed playback
+function recreatePlayer(connection=null) {
+	let foundConnection = null;
+	if (connection)
+		foundConnection = connection;
+	else if (client.voiceConnections.size > 0)
+		foundConnection = client.voiceConnections.array()[0];
+
+	if (foundConnection) {
+		delete foundConnection.player;
+		foundConnection.player = new AudioPlayer(foundConnection);
+	}
+}
+
 // =============== SOUND FUNCTIONS ===============
 
 //Destroy all voice recievers
@@ -212,29 +252,32 @@ function startRecording(connection) {
 						if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("Got " + chunkCount + " chunks with total size of " + totalStreamSize + " bytes from user '" + getUserName(user) + "'.", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
 
 						let outputFile = path.resolve(__dirname, config.folders.VoiceRecording, fileTimeNow + '_' + utils.cutFillString(user.id, 20) + '_' + utils.cutFillString(durationMs, 10, '0') + '_' + utils.sanitizeFilename(getUserName(user)) + '.' + config.RecordingAudioContainer)
-						ffmpeg(tempfile + '.pcm')
-							.inputOptions([
-								'-f', 's16le',
-								'-ac', '2',
-								'-ar', '48000'
-							])
+						let FFcommand = ffmpeg(tempfile + '.pcm')
 							.noVideo()
-							.audioCodec(config.RecordingAudioCodec)
-							.audioBitrate(config.RecordingAudioBitrate)
-							.on('error', function (err) {
-								utils.report("ffmpeg reported error: " + err, 'r')
-							})
-							.on('end', function (stdout, stderr) {
-								if (config.logging.ConsoleReport.RecFilesSavedAndProcessed) utils.report("Saved recording of '" + user.username + "' with duration of " + durationMs + " ms (" + chunkCount + " chunks).", 'c', config.logging.LogFileReport.RecFilesSavedAndProcessed);
-								fs.unlink(tempfile + '.pcm', err => {
-									if (err) utils.report("Couldn't delete temp file '" + tempfile + "'. Error: " + err, 'r');
-								});
-							})
-							.on('codecData', format => {
-								if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
-							})
-							.output(outputFile)
-							.run();
+							.inputOptions([
+									'-f', 's16le',
+									'-ac', '2',
+									'-ar', '48000'
+								])
+								.audioCodec(config.RecordingAudioCodec)
+								.audioBitrate(config.RecordingAudioBitrate)
+								.on('error', function (err) {
+									utils.report("ffmpeg reported error: " + err, 'r')
+								})
+								.on('end', function (stdout, stderr) {
+									if (config.logging.ConsoleReport.RecFilesSavedAndProcessed) utils.report("Saved recording of '" + user.username + "' with duration of " + durationMs + " ms (" + chunkCount + " chunks).", 'c', config.logging.LogFileReport.RecFilesSavedAndProcessed);
+									fs.unlink(tempfile + '.pcm', err => {
+										if (err) utils.report("Couldn't delete temp file '" + tempfile + "'. Error: " + err, 'r');
+									});
+								})
+								.on('codecData', format => {
+									if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
+								})
+								.on('start', function (commandLine) {
+									//if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+								})
+								.output(outputFile)
+								.run();
 					});
 				}
 			})
@@ -329,6 +372,7 @@ function joinVoiceChannelQueue(channel) {
 	});
 }
 
+
 //Check if we are on the channel, if we are - do nothing, if not - join it
 function checkChannelJoin(channel) {
 	return new Promise((resolve, reject) => {
@@ -351,10 +395,12 @@ function checkChannelJoin(channel) {
 }
 
 //Set current volume level to desired value
-function setVolume(volume, iterations, time) {
+function setVolume(volume, time) {
 	if (client.voiceConnections.size > 0) {
+		let iterations = Math.floor(time / 20);
 		let volDelta = (volume - CurrentVolume) / iterations;
-		volumeIterate(client.voiceConnections.array()[0].dispatcher, iterations, Math.floor(time / iterations), volDelta, CurrentVolume);
+		//Each packet sent is 20ms long, so no need to change it more often since it won't have any effect
+		volumeIterate(client.voiceConnections.array()[0].dispatcher, iterations, 20, volDelta, CurrentVolume);
 		CurrentVolume = volume;
 	}
 }
@@ -393,29 +439,27 @@ function attachEventsOnPlayback(connection) {
 		soundIsPlaying = false;
 		handleQueue(reason);
 		LastPlaybackTime = Date.now();
-
-		//
+		//Recreate player in 1 second if nothing else is playing
+		setTimeout(() => {
+			if (!soundIsPlaying && !PreparingToPlaySound) {
+				recreatePlayer();
+			}
+		}, 1000);
 	});
 	connection.dispatcher.on('start', () => {
 		//For debugging responce timings
 		if (config.logging.ConsoleReport.DelayDebug) {
 			utils.report(utils.msCount("Playback") + " Started playing!.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 		} 
-
 		if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("Started playing!", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
 		PreparingToPlaySound = false;
 		soundIsPlaying = true;
+		//console.log(connection.player);
 	});
-	connection.dispatcher.on('debug', (message) => {
+	connection.dispatcher.on('speaking', (message) => {
 		//For debugging responce timings
 		if (config.logging.ConsoleReport.DelayDebug) {
 			utils.report(utils.msCount("Playback", 'reset') + " Dispatcher debug: " + message, 'c', config.logging.LogFileReport.DelayDebug); //debug message
-		}
-	});
-	connection.on('debug', (message) => {
-		//For debugging responce timings
-		if (config.logging.ConsoleReport.DelayDebug) {
-			utils.report(utils.msCount("Playback", 'reset') + " Connection debug: " + message, 'c', config.logging.LogFileReport.DelayDebug); //debug message
 		}
 	});
 	connection.dispatcher.on('error', (error) => {
@@ -449,13 +493,11 @@ function playQueue(connection) {
 					let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-					//let dispatcher = connection.playFile(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), PlaybackOptions);
-					//let stream = fs.createReadStream(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)));
 
 					let ffstream = utils.processStream(path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), inputObject.flags);
 					connection.playConvertedStream(ffstream, PlaybackOptions);
-					
-					playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`, duration " + humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+
+					playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`" + utils.flagsToString(inputObject.flags) + ", duration " + humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
 					//Attach event listeners
 					attachEventsOnPlayback(connection);
 				}
@@ -488,36 +530,7 @@ function playQueue(connection) {
 						let ffstream = utils.processStream(stream, inputObject.flags);
 						connection.playConvertedStream(ffstream, PlaybackOptions);
 						
-						/*if (inputObject.flags.effects) {
-							let command = ffmpeg(stream);
-							command = utils.addAudioEffects(command, inputObject.flags.effects);
-							const ffstream = new PassThrough();
-							command.audioCodec('libmp3lame')
-								.audioBitrate('320k')
-								.format('mp3')
-								.on('error', function (err) {
-									utils.report("ffmpeg reported error: " + err, 'r');
-									if (ffstream)
-										ffstream.end();
-								})
-								.on('end', function (stdout, stderr) {
-									//if (stream)
-									//	stream.close();
-									if (ffstream)
-										ffstream.end();
-								})
-								.on('start', function (commandLine) {
-									console.log('Spawned Ffmpeg with command: ' + commandLine);
-								})
-								.pipe(ffstream);
-							connection.playStream(ffstream, PlaybackOptions);
-						}
-						else
-							connection.playStream(stream, PlaybackOptions);*/
-						
-
-						
-						playbackMessage(":musical_note: Playing Youtube `" + CurrentPlayingSound.title.substring(0, config.YoutubeTitleLengthLimit) + "` (duration " + humanTime(CurrentPlayingSound.duration) + "). Requested by " + getUserTagName(CurrentPlayingSound.user) + ". <" + CurrentPlayingSound.link + ">");
+						playbackMessage(":musical_note: Playing Youtube `" + CurrentPlayingSound.title.substring(0, config.YoutubeTitleLengthLimit) + "`" + utils.flagsToString(inputObject.flags) + " (duration " + humanTime(CurrentPlayingSound.duration) + "). Requested by " + getUserTagName(CurrentPlayingSound.user) + ". <" + CurrentPlayingSound.link + ">");
 						//Attach event listeners
 						attachEventsOnPlayback(connection);
 						recievedInfo = true;
@@ -561,18 +574,19 @@ function stopPlayback(connection, pauseTheFile = false) {
 	if (connection.dispatcher) {
 		if (connection.dispatcher.stream)
 			connection.dispatcher.stream.destroy();
-		connection.dispatcher.end();
+		//connection.dispatcher.end();
 	}
 }
 
 //Check if we need to launch next sound in the queue
 function handleQueue(reason) {
-	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback", 'start') + " handleQueue() starting.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+	if (config.logging.ConsoleReport.DelayDebug) utils.msCount("Playback", 'start'); //debug message (not printing)
 	if (!PreparingToPlaySound && !PausingThePlayback) {
 		setTimeout(() => {
-			if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " playQueue() starting.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-			if (client.voiceConnections.size > 0)
+			if (config.logging.ConsoleReport.DelayDebug) utils.msCount("Playback"); //debug message (not printing)
+			if (client.voiceConnections.size > 0) {
 				playQueue(client.voiceConnections.array()[0]);
+			}
 		}, (Date.now() - LastPlaybackTime >= config.SoundPlaybackWaitTimeMs ? 0 : config.SoundPlaybackWaitTimeMs - (Date.now() - LastPlaybackTime)));
 	}
 	if (PausingThePlayback)
@@ -630,10 +644,10 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 
 				if (client.voiceConnections.size > 0 && config.SwitchVoiceRoomIfMoreMembers) {
 					//Change the channel if it has more members than current one
-					if (countChannelMembers(NewMember.voiceChannel) > countChannelMembers(client.voiceConnections.first(1)[0].channel))
+					if (countChannelMembers(NewMember.voiceChannel) > countChannelMembers(client.voiceConnections.first(1)[0].channel) && NewMember.voiceChannel.joinable)
 						joinVoiceChannelQueue(NewMember.voiceChannel);
 				}
-				else if (client.voiceConnections.size == 0)
+				else if (client.voiceConnections.size == 0 && NewMember.voiceChannel.joinable)
 					//If we dont have any active channel connections
 					joinVoiceChannelQueue(NewMember.voiceChannel);
 
@@ -661,10 +675,10 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " switched to '" + NewMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
 			if (client.voiceConnections.size > 0 && config.SwitchVoiceRoomIfMoreMembers) {
 				//Change the channel if it has more members than current one
-				if ((countChannelMembers(NewMember.voiceChannel) > countChannelMembers(client.voiceConnections.array()[0].channel) || countChannelMembers(client.voiceConnections.array()[0].channel) == 0) && NewMember.voiceChannel.id != client.voiceConnections.array()[0].channel.id)
+				if ((countChannelMembers(NewMember.voiceChannel) > countChannelMembers(client.voiceConnections.array()[0].channel) || countChannelMembers(client.voiceConnections.array()[0].channel) == 0) && NewMember.voiceChannel.id != client.voiceConnections.array()[0].channel.id && NewMember.voiceChannel.joinable)
 					joinVoiceChannelQueue(NewMember.voiceChannel);
 			}
-			else if (client.voiceConnections.size == 0)
+			else if (client.voiceConnections.size == 0 && NewMember.voiceChannel.joinable)
 				//If we dont have any active channel connections
 				joinVoiceChannelQueue(NewMember.voiceChannel);
 		}
@@ -676,6 +690,7 @@ if (utils.checkFoldersExistance()) {
 	db.loadUsersDB();
 	db.loadSoundsDB();
 	db.scanSoundsFolder();
+
 	client.login(config.token);
 }
 
@@ -683,7 +698,7 @@ if (utils.checkFoldersExistance()) {
 client.on('message', async message => {
 	let userName = getUserName(message.author)
 	let guildMember = message.channel.type != "text" ? client.guilds.get(config.guildId).members.get(message.author.id) : message.member;
-	if (userName) {
+	if (userName && guildMember) {
 		//Only handle commands from our guild or direct messages from members of our guild
 		if (message.channel.type != 'dm' && message.channel.guild) if (message.channel.guild.id != config.guildId) return;
 			//If its a command
@@ -757,18 +772,19 @@ client.on('message', async message => {
 										else
 											sendInfoMessage("I'm already on the channel! :angry:", message.channel, message.author);
 									}
-									//Join the channel
-									checkChannelJoin(guildMember.voiceChannel)
-										.then((connection) => {
-											//Play the sound if there were any
-											if (playAfterRejoining)
-												handleQueue('PlayAfterRejoining');
-										})
-										//We couldnt join the channel, throw message on a log channel about it
-										.catch(error => {
-											utils.report("Couldn't join channel. Error: " + error, 'r');
-											sendInfoMessage("I couldn't join your channel! :sob:", message.channel, message.author);
-										});
+									if (getVoiceChannel(guildMember).joinable)
+										//Join the channel
+										checkChannelJoin(guildMember.voiceChannel)
+											.then((connection) => {
+												//Play the sound if there were any
+												if (playAfterRejoining)
+													handleQueue('PlayAfterRejoining');
+											})
+											//We couldnt join the channel, throw message on a log channel about it
+											.catch(error => {
+												utils.report("Couldn't join channel. Error: " + error, 'r');
+												sendInfoMessage("I couldn't join your channel! :sob:", message.channel, message.author);
+											});
 
 								}
 								else
@@ -831,18 +847,19 @@ client.on('message', async message => {
 									recieversDestroy();
 									//Make sure wo wait before joining
 									LastChannelChangeTimeMs = Date.now();
-									//Join the channel again
-									checkChannelJoin(guildMember.voiceChannel)
-										.then((connection) => {
-											utils.report("Successfully rejoined the channel '" + guildMember.voiceChannel.name + "' (requested by " + userName + ").", 'g');
-											//Play the sound if there were any
-											if (playAfterRejoining)
-												handleQueue('PlayAfterRejoining');
-										})
-										//We couldnt join the channel, throw message on a log channel about it
-										.catch(error => {
-											utils.report("Couldn't join channel. Error: " + error, 'r');
-										});
+									if (guildMember.voiceChannel.joinable)
+										//Join the channel again
+										checkChannelJoin(guildMember.voiceChannel)
+											.then((connection) => {
+												utils.report("Successfully rejoined the channel '" + guildMember.voiceChannel.name + "' (requested by " + userName + ").", 'g');
+												//Play the sound if there were any
+												if (playAfterRejoining)
+													handleQueue('PlayAfterRejoining');
+											})
+											//We couldnt join the channel, throw message on a log channel about it
+											.catch(error => {
+												utils.report("Couldn't join channel. Error: " + error, 'r');
+											});
 								}
 								else
 									sendInfoMessage("Join a voice channel first!", message.channel, message.author);
@@ -862,7 +879,7 @@ client.on('message', async message => {
 									//If sound is playing, change its volume
 									if (soundIsPlaying) {
 										let oldVolume = Math.round(CurrentVolume * 100 / (config.VolumeBotGlobal / 100));
-										setVolume(calcVolumeToSet(volumeToSet), 100, 1000);
+										setVolume(calcVolumeToSet(volumeToSet), 1000);
 										playbackMessage(((volumeToSet > oldVolume) ? ":loud_sound:" : ":sound:") + " " + getUserTagName(message.author) + " changed volume from " + oldVolume + "% to " + volumeToSet + "%.");
 									}
 									else
@@ -926,7 +943,7 @@ client.on('message', async message => {
 									else {
 										let found = db.findSound(args[0]);
 										if (found.length == 1 || (!config.StrictAudioCommands && found.length > 1)) {
-											playbackMessage(":arrow_right: " + getUserTagName(message.author) + " added file to the queue: '" + found[0] + "' (duration " + humanTime(db.getSoundDuration(found[0])) + ").");
+											playbackMessage(":arrow_right: " + getUserTagName(message.author) + " added file to the queue: '" + found[0] + "'" + utils.flagsToString(additionalFlags) + " (duration " + humanTime(db.getSoundDuration(found[0])) + ").");
 
 											//Sort the result first
 											let foundOrdered = found.sort(function (a, b) {
@@ -965,9 +982,10 @@ client.on('message', async message => {
 								if (config.EnableSoundboard) {
 									if (ytdl.validateURL(args[0])) {
 										if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("YouTubeCommand", 'start') + " Recieved command!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-										if (guildMember.voiceChannel || client.voiceConnections.size) {
-											checkChannelJoin(getVoiceChannel(guildMember))
-												.then((connection) => {
+										
+										prepareForPlaybackOnChannel(guildMember)
+											.then((connection, error) => {
+												if (!error) {
 													if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("YouTubeCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 													//Create Queue element
 													QueueElement = { 'type': 'youtube', 'link': args[0], 'user': guildMember, 'flags': additionalFlags };
@@ -986,14 +1004,10 @@ client.on('message', async message => {
 														PlayingQueue.unshift(QueueElement);
 														handleQueue('newSoundRequest');
 													}
-												})
-												//We couldnt join the channel, throw message on a log channel about it
-												.catch(error => {
-													utils.report("Couldn't join channel. Error: " + error, 'r');
-												});
-										}
-										else
-											sendInfoMessage("Join a voice channel first!", message.channel, message.author);
+												}
+											});
+											
+										
 									}
 									else
 										sendInfoMessage("This is not a valid Youtube link!", message.channel, message.author);
@@ -1008,10 +1022,9 @@ client.on('message', async message => {
 									//Requested a local sound playback
 									let found = db.findSound(command);
 									if (found.length == 1 || (!config.StrictAudioCommands && found.length > 1)) {
-										if (guildMember.voiceChannel || client.voiceConnections.size) {
-											if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Found file!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-											checkChannelJoin(getVoiceChannel(guildMember))
-												.then((connection) => {
+										prepareForPlaybackOnChannel(guildMember)
+											.then((connection, error) => {
+												if (!error) {
 													if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 													//Sort the result first
 													let foundOrdered = found.sort(function (a, b) {
@@ -1035,15 +1048,8 @@ client.on('message', async message => {
 														PlayingQueue.unshift(QueueElement);
 														handleQueue('newSoundRequest');
 													}
-
-												})
-												//We couldnt join the channel, throw message on a log channel about it
-												.catch(error => {
-													utils.report("Couldn't join channel. Error: " + error, 'r');
-												});
-										}
-										else
-											sendInfoMessage("Join a voice channel first!", message.channel, message.author);
+												}
+											});
 									}
 									else if (found.length > 1)
 										sendInfoMessage("More than one result found!", message.channel, message.author);
@@ -1064,125 +1070,127 @@ client.on('message', async message => {
 			}
 			//If its a file sent in private
 			if (message.channel.type == 'dm' && message.attachments.size > 0 && config.EnableSoundboard && config.AcceptDirectMessagesAudio) {
-				console.log(message.attachments.array());
-				let attachment = message.attachments.array()[0];
-				utils.report(userName + " sent file '" + attachment.filename + "' of size " + Math.round(attachment.filesize / 1024) + " Kb.", 'm');
-				if ((attachment.filesize / 1024 <= config.MessageAttachmentSizeLimitKb && config.MessageAttachmentSizeLimitKb > 0) || config.MessageAttachmentSizeLimitKb == 0) {
-					//let targetFilename = attachment.filename.toLowerCase().replace(/[^a-z0-9_.]/g, '');
-					let targetFilename = attachment.filename;
-					let dest = path.resolve(__dirname, config.folders.Temp, targetFilename);
-					let pathParse = path.parse(dest);
-					let nameCleanNoExtension = pathParse.name.toLowerCase().replace(/[^a-z0-9_]/g, '');
-					let nameClean = nameCleanNoExtension + pathParse.ext.toLowerCase();
-					
-					//let soundsDestination = path.resolve(__dirname, config.folders.Sounds, nameClean);
-					if (!fs.existsSync(path.resolve(__dirname, config.folders.Sounds, nameClean))) {
-						utils.report(userName + " sent file '" + attachment.filename + "' of size " + Math.round(attachment.filesize / 1024) + " Kb.", 'm');
-						message.reply("Please, wait while I process the file...");
-						let file = fs.createWriteStream(dest);
-						let request = https.get(attachment.url, (response) => {
-							response.pipe(file);
-							file.on('finish', () => {
-								file.close(() => {
-									//Check if this file is a proper audio file
-									utils.checkAudioFormat(dest)
-										.then(result => {
-											let destination = path.resolve(__dirname, config.folders.Sounds, nameClean);
-											//If we found the proper format, no need to convert
-											if (result['mode'] == "fits") {
-												utils.moveFile(dest, path.resolve(__dirname, config.folders.Sounds, nameClean))
-													.then(() => {
-														message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
-														db.scanSoundsFolder();
-													})
-													.catch(err => {
-														message.reply("There was an error while performing server operations! Operation was not finished.");
-													});
-											}
-											//If format did fit, but we need to remux it because of several streams
-											else if (result['mode'] == "remux") {
-												utils.report("Recieved file '" + attachment.filename + "' from " + userName + ". Duration " + result['metadata']['format']['duration'] + " s, streams: " + result['metadata']['streams'].length + ". Need remuxing...", 'y');
-												let outputFile = path.resolve(__dirname, config.folders.Temp, "remux_" + nameClean)
-												ffmpeg(dest)
-													.outputOptions(['-map 0:' + result['remuxStreamToKeep']])
-													.noVideo()
-													.audioCodec("copy")
-													.on('error', function (err) {
-														utils.report("ffmpeg reported error: " + err, 'r');
-														utils.deleteFile(dest);
-														utils.deleteFile(outputFile);
-													})
-													.on('end', function (stdout, stderr) {
-														utils.deleteFile(dest);
-														utils.moveFile(outputFile, path.resolve(__dirname, config.folders.Sounds, nameClean))
-															.then(() => {
-																message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
-																db.scanSoundsFolder();
-															})
-															.catch(err => {
-																message.reply("There was an error while performing server operations! Operation was not finished.");
-															});
-													})
-													.output(outputFile)
-													.run();
-											}
-											//If format didnt fit but its an audio, convert it
-											else if (result['mode'] == "convert") {
-												//result['audioStream'] = lastAudioStream;
-												utils.report("Recieved file '" + attachment.filename + "' from " + userName + ". Duration " + result['metadata']['duration'] + " s, format: '" + result['metadata']['streams'][0]['codec_name']+"', streams: " + result['metadata']['streams'].length + ". Converting...", 'y');
-												let outputFile = path.resolve(__dirname, config.folders.Temp, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer)
-												ffmpeg(dest)
-													.outputOptions(['-map 0:' + result['audioStream']])
-													.noVideo()
-													.audioCodec(config.ConvertUploadedAudioCodec)
-													.audioBitrate(config.ConvertUploadedAudioBitrate)
-													.on('error', function (err) {
-														utils.report("ffmpeg reported error: " + err, 'r');
-														utils.deleteFile(dest);
-														utils.deleteFile(outputFile);
-													})
-													.on('end', function (stdout, stderr) {
-														utils.deleteFile(dest);
-														utils.moveFile(outputFile, path.resolve(__dirname, config.folders.Sounds, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer))
-															.then(() => {
-																message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
-																db.scanSoundsFolder();
-															})
-															.catch(err => {
-																message.reply("There was an error while performing server operations! Operation was not finished.");
-															});
-													})
-													.output(outputFile)
-													.run();
-											}
-											//If we didnt find an audio, the file is not acceptable
-											else {
-												message.reply("Unknown file type. This is not an audio file.");
-												utils.deleteFile(dest);
-											}
+				
+				let attachments = message.attachments.array();
+				for (i in attachments) {
+					let attachment = attachments[i];
+					utils.report(userName + " sent file '" + attachment.filename + "' of size " + Math.round(attachment.filesize / 1024) + " Kb.", 'm');
+					if ((attachment.filesize / 1024 <= config.MessageAttachmentSizeLimitKb && config.MessageAttachmentSizeLimitKb > 0) || config.MessageAttachmentSizeLimitKb == 0) {
+						//let targetFilename = attachment.filename.toLowerCase().replace(/[^a-z0-9_.]/g, '');
+						let targetFilename = attachment.filename;
+						let dest = path.resolve(__dirname, config.folders.Temp, targetFilename);
+						let pathParse = path.parse(dest);
+						let nameCleanNoExtension = pathParse.name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+						let nameClean = nameCleanNoExtension + pathParse.ext.toLowerCase();
 
-											
-										})
-										.catch(err => {
-											utils.report("Could't read file format. Error: " + err, 'r');
-											message.reply("There was an error reading file's format. Looks like the file is corrupt.");
-											fs.unlink(dest, err => {
-												if (err)
-													utils.report("Could't delete file '" + dest + "'. Error: " + err, 'r');
+						//let soundsDestination = path.resolve(__dirname, config.folders.Sounds, nameClean);
+						if (!fs.existsSync(path.resolve(__dirname, config.folders.Sounds, nameClean))) {
+							message.reply("Please, wait while I process the file...");
+							let file = fs.createWriteStream(dest);
+							let request = https.get(attachment.url, (response) => {
+								response.pipe(file);
+								file.on('finish', () => {
+									file.close(() => {
+										//Check if this file is a proper audio file
+										utils.checkAudioFormat(dest)
+											.then(result => {
+												let destination = path.resolve(__dirname, config.folders.Sounds, nameClean);
+												//If we found the proper format, no need to convert
+												if (result['mode'] == "fits") {
+													utils.moveFile(dest, path.resolve(__dirname, config.folders.Sounds, nameClean))
+														.then(() => {
+															message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
+															db.scanSoundsFolder();
+														})
+														.catch(err => {
+															message.reply("There was an error while performing server operations! Operation was not finished.");
+														});
+												}
+												//If format did fit, but we need to remux it because of several streams
+												else if (result['mode'] == "remux") {
+													utils.report("Recieved file '" + attachment.filename + "' from " + userName + ". Duration " + result['metadata']['format']['duration'] + " s, streams: " + result['metadata']['streams'].length + ". Need remuxing...", 'y');
+													let outputFile = path.resolve(__dirname, config.folders.Temp, "remux_" + nameClean)
+													ffmpeg(dest)
+														.outputOptions(['-map 0:' + result['remuxStreamToKeep']])
+														.noVideo()
+														.audioCodec("copy")
+														.on('error', function (err) {
+															utils.report("ffmpeg reported error: " + err, 'r');
+															utils.deleteFile(dest);
+															utils.deleteFile(outputFile);
+														})
+														.on('end', function (stdout, stderr) {
+															utils.deleteFile(dest);
+															utils.moveFile(outputFile, path.resolve(__dirname, config.folders.Sounds, nameClean))
+																.then(() => {
+																	message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
+																	db.scanSoundsFolder();
+																})
+																.catch(err => {
+																	message.reply("There was an error while performing server operations! Operation was not finished.");
+																});
+														})
+														.output(outputFile)
+														.run();
+												}
+												//If format didnt fit but its an audio, convert it
+												else if (result['mode'] == "convert") {
+													//result['audioStream'] = lastAudioStream;
+													utils.report("Recieved file '" + attachment.filename + "' from " + userName + ". Duration " + result['metadata']['duration'] + " s, format: '" + result['metadata']['streams'][0]['codec_name'] + "', streams: " + result['metadata']['streams'].length + ". Converting...", 'y');
+													let outputFile = path.resolve(__dirname, config.folders.Temp, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer)
+													ffmpeg(dest)
+														.outputOptions(['-map 0:' + result['audioStream']])
+														.noVideo()
+														.audioCodec(config.ConvertUploadedAudioCodec)
+														.audioBitrate(config.ConvertUploadedAudioBitrate)
+														.on('error', function (err) {
+															utils.report("ffmpeg reported error: " + err, 'r');
+															utils.deleteFile(dest);
+															utils.deleteFile(outputFile);
+														})
+														.on('end', function (stdout, stderr) {
+															utils.deleteFile(dest);
+															utils.moveFile(outputFile, path.resolve(__dirname, config.folders.Sounds, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer))
+																.then(() => {
+																	message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
+																	db.scanSoundsFolder();
+																})
+																.catch(err => {
+																	message.reply("There was an error while performing server operations! Operation was not finished.");
+																});
+														})
+														.output(outputFile)
+														.run();
+												}
+												//If we didnt find an audio, the file is not acceptable
+												else {
+													message.reply("Unknown file type. This is not an audio file.");
+													utils.deleteFile(dest);
+												}
+
+
+											})
+											.catch(err => {
+												utils.report("Could't read file format. Error: " + err, 'r');
+												message.reply("There was an error reading file's format. Looks like the file is corrupt.");
+												fs.unlink(dest, err => {
+													if (err)
+														utils.report("Could't delete file '" + dest + "'. Error: " + err, 'r');
+												});
 											});
-										});
+									});
 								});
+							}).on('error', function (err) { // Handle errors
+								fs.unlink(dest); // Delete the file async. (But we don't check the result)
+								utils.report("Couldn't download file! Error: " + err, 'r');
+								message.reply("There was an error downloading the file that you sent. Please, try again.");
 							});
-						}).on('error', function (err) { // Handle errors
-							fs.unlink(dest); // Delete the file async. (But we don't check the result)
-							utils.report("Couldn't download file! Error: " + err, 'r');
-							message.reply("There was an error downloading the file that you sent. Please, try again.");
-						});
+						}
+						else
+							message.reply("File '" + nameClean + "' already exists, please rename the file and try again!");
 					}
-					else
-						message.reply("File '" + nameClean + "' already exists, please rename the file and try again!");
+					else message.reply("This file is too big, it has to be less than " + config.MessageAttachmentSizeLimitKb + " Kb.");
 				}
-				else message.reply("This file is too big, it has to be less than " + config.MessageAttachmentSizeLimitKb + " Kb.");
 			}
 		
 	}
@@ -1190,5 +1198,7 @@ client.on('message', async message => {
 		utils.report("Direct message from user '" + message.author.username + "' (" + message.author.id + ") that is not part of the '" + client.guilds.get(config.guildId).name + "' guild: " + message.content, 'y');
 });
 
-
+process.on('uncaughtException', function (exception) {
+	utils.report("uncaughtException: " + exception, 'r');
+});
 
