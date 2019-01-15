@@ -54,7 +54,7 @@ node bot.js
 ```
 That’s it! It's running now!
 To detach from screen session, use `Ctrl+A`, then `D`. If you want to reattach running bot session use same command ```screen -aAxR -S jsdrasb```
-To upload sound files to the bot you can either put them into 'sounds' foler or send them in Direct Message as an attachment. If audio format is unsupported it will be automatically converted. If its a video file, it will cut and save only audio from it.
+To upload sound files to the bot you can either put them into 'sounds' folder or send them in Direct Message as an attachment. If audio format is unsupported it will be automatically converted. If its a video file, it will cut and save only audio from it.
 
 # Commands
 Default command character is `?`, all commands should start with it, but you can change it to anything in [config.js]( https://github.com/AntonGrushin/JS_DRaSB/blob/master/config.js) file.

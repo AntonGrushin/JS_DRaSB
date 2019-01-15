@@ -83,6 +83,9 @@ module.exports = {
 	//Data Container (file extension)
 	RecordingAudioContainer: 'ogg', // <= NO DOT!
 
+	//Do not save recordings that are less or equal to this duration (milliseconds)
+	RecordingsDurationSkipThresholdMs: 40,
+
 	// ======== SOUND AND VOICE CHANNEL OPTIONS ========
 
 	//Global volume limiter, this amount will be considered as 100% when using 'volume' command
@@ -100,7 +103,7 @@ module.exports = {
 	//Automatically leave voice channel if there is no one left in the channel
 	AutoLeaveIfAlone: true,
 
-	//Switch channel if other voice room has more members than current one (even if false, bot will switch channel in there is no one left in the current one)
+	//Switch channel if other voice room has more members than current one (even if false, bot will switch channel if there is no one left in the current one)
 	SwitchVoiceRoomIfMoreMembers: false,
 
 	//Do we pause sound playback if its considered to be 'long' sound and some short one was requested to play and resume playing after short finished?
@@ -141,6 +144,79 @@ module.exports = {
 	ConvertUploadedAudioCodec: 'libmp3lame',
 	ConvertUploadedAudioBitrate: '240k',
 	ConvertUploadedAudioContainer: 'mp3', // <= NO DOT!
+
+	// ======== RECORDINGS PLAYBACK ========
+
+	//Search in this period of time (hours) for records. If nothing was found, stop the search and return fail.
+	SearchHoursPeriod: 0,
+
+	//What should be maximum allowed duration of playing recordings (in seconds). 0 for no limitation
+	// BETA: Current algorithm is very hungry on memory, building 60 seconds of recorded data takes 700-800 Mb of ram
+	MaximumDurationToPlayback: 60,
+
+	//If gap between recorded audios is more than this amount of seconds stop the playback since conversation was probably over. Set to 0 for no limitation.
+	GapDurationToStopPlayback: 10 * 60,
+
+	//Make sure there is this amount of ms getween recorded files (If current gat is bigger, it will be reduced to this amount, if smaller, increased)
+	GapsBetweenSayingsMs: 50,
+
+	//Duration of 'phrase' in milliseconds. Recordings that have duration longer than this, will be considered as 'phrase' or 'quote'.
+	PhraseMsDuration: 3000,
+	//If gaps between recordings is less than this amount of ms they all will be considered a single 'phrase'
+	PhraseAllowedGapMsTime: 300,
+
+	// ======== PERFORMANCE ========
+
+	//How many parallel ffmpeg processes we can run while scanning for files
+	//Increasing this value can make launching and DB updating process faster in cost of memory and CPU usage
+	FfmpegParallelProcLimit: 6,
+
+	//How many parallel file scans can run (for updating recordings database)
+	FileScanParallelLimit: 4,
+
+	//Recordings DB update period. DB won't be recorded on HDD more often than this amount of seconds
+	RecDBUpdatePeriod: 30,
+
+	//Limit amount of FFMPEG ComplexFilters applied to this value (0 if unlimited)
+	ComplexFiltersAmountLimit: 5,
+
+    // ======== PERMISSIONS ========
+
+    permissions: {
+        //List of Admins IDs. Example: ['262298664016281600']
+		AdminsList: [],
+
+        //Level of permissions set on your server:
+        //  0 - (Blacklist) Everyone on the server has 'user' permissions (except members in BlackList)
+        //  1 - (Whitelist) Only members with special roles (listed in UserRolesList) and listed in WhitelistMembers will have 'user' permission (except members in BlackList), everyone else wont be able to run any commands
+        PermissionsLevel: 0,
+
+		//Blacklist - List of user IDs that are not allowed to use any bot command despite them having role or being in Whitelist
+		BlackList: [],
+
+        //(Needed only for level 1) List of roles which will have 'user' permission if PermissionsLevel is set to 1
+		//This needs to be either role ID or exact name of the role (case sensitive). Mind that if you have several roles with that name they all will have permission.
+		//Example: ['SomeRole', '222222222033333300']
+        UserRolesList: [],
+		//WhiteList - List of members IDs that will have 'user' permission in addition to UserRolesList
+		WhitelistMembers: [],
+
+		//(for both levels 1 and 2)
+		//'user' permissions are set here
+        User: {
+			SummonBot: true,
+			DismissBot: true,
+            PlayFiles: true,
+            PlayYoutubeLinks: true,
+			UploadLocalAudioFiles: true,
+			RenameLocalAudioFiles: true,
+			DeleteLocalAudioFiles: false,
+			RecieveListOfLocalAudios: true,
+			PauseResumeSkipPlayback: true,
+			RejoinChannel: true,
+			StopPlaybackClearQueue: true,
+        },
+    },
 
 	// ======== FOLDERS ========
 

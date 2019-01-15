@@ -20,31 +20,31 @@ const config = require('./config.js');
 const path = require('path');
 const mkdirp = require('mkdirp');
 const ffmpeg = require('fluent-ffmpeg');
-const { PassThrough } = require('stream')  //For piping file stream to ffmpeg
+const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
 
 //technical
 var timings = {};
 
-//Class to combine ffmpeg complex filters together
-class complexFilterBuild {
-	constructor() {
-		this.iteration = 0;
-		this.output = [];
-		this.endresult = "";
-	}
+////Class to combine ffmpeg complex filters together
+//class complexFilterBuild {
+//	constructor() {
+//		this.iteration = 0;
+//		this.output = [];
+//		this.endresult = "";
+//	}
 
-	addFilter(filter, input = null) {
-		let inputSource = "";
-		if (!input && this.iteration == 0)
-			inputSource = "[0:a]";
-		else if (input)
-			inputSource = input;
-		else
-			inputSource = "[s" + this.iteration + "]";
-		this.output.push(inputSource + filter + "[s" + (++this.iteration) + "]");
-		this.endresult = "s" + this.iteration;
-	}
-}
+//	addFilter(filter, input = null) {
+//		let inputSource = "";
+//		if (!input && this.iteration == 0)
+//			inputSource = "[0:a]";
+//		else if (input)
+//			inputSource = input;
+//		else
+//			inputSource = "[s" + this.iteration + "]";
+//		this.output.push(inputSource + filter + "[s" + (++this.iteration) + "]");
+//		this.endresult = "s" + this.iteration;
+//	}
+//}
 
 module.exports = {
 
@@ -68,9 +68,12 @@ module.exports = {
 
 	//Get filename string timestamp
 	fileTimeNow: function () {
+		let out = {};
 		let now = new Date();
 		var timeonly = this.pad(now.getHours()) + '-' + this.pad(now.getMinutes()) + '-' + this.pad(now.getSeconds()) + '_' + this.pad(now.getMilliseconds(), 3);
-		return (now.getFullYear() + '-' + this.pad(now.getMonth() + 1) + "-" + this.pad(now.getDate()) + "_" + timeonly);
+		out['now'] = now;
+		out['file'] = (now.getFullYear() + '-' + this.pad(now.getMonth() + 1) + "-" + this.pad(now.getDate()) + "_" + timeonly);
+		return out;
 	},
 
 	//Delete file
@@ -97,6 +100,29 @@ module.exports = {
 		});
 	},
 
+	//Return 's' if number is greather than 1
+	addS: function(number) {
+		if (number > 1)
+			return "s";
+		else
+			return "";
+	},
+
+//Convert time in seconds to human readabale format
+	humanTime: function(seconds) {
+		let numdays = Math.floor(seconds / 86400);
+		let numhours = Math.floor(seconds / 3600);
+		let numminutes = Math.floor(seconds / 60);
+		if (numdays)
+			return numdays + " day" + this.addS(numdays);
+		else if (numhours)
+			return numhours + " hour" + this.addS(numhours);
+		else if (numminutes)
+			return numminutes + " minute" + this.addS(numminutes);
+		else
+			return Math.floor(seconds) + " second" + this.addS(seconds);
+	},
+
 	//Convert string hh:mm:ss or mm:ss to seconds
 	toSeconds: function(str) {
 		let match = null;
@@ -111,11 +137,10 @@ module.exports = {
 
 			return s;
 		}
-		else if (match = str.match(/([0-9]+[hmsd]+)/g)) {
+		else if (match = str.match(/([0-9.]+[hmsd]+)/g)) {
 			let result = 0;
 
 			for (i in match) {
-				console.log(match[i])
 				let thisMatch = match[i].match(/([0-9]+)([hmsd]+)/)
 				if (thisMatch[2] == 'd')
 					result += Number(thisMatch[1]) * 3600 * 24;
@@ -141,6 +166,7 @@ module.exports = {
 			  start: 3671,
 			  end: 201,
 			  duration: 5,
+			  date: 2018-01-01T15:00:00.000Z,
 			  effects:
 			   [ [ 'pitch', -20 ],
 				 [ 'vibrato', 12, 50 ],
@@ -156,17 +182,25 @@ module.exports = {
 		let startResult = inString.match(/[ ]+(?:s|start|back|b|ago)[ ]{0,}([0-9.:|0-9hmsd]+)/);
 		if (startResult)
 			output['start'] = this.toSeconds(startResult[1]);
-		let endResult = inString.match(/[ ]+(?:end|e)[ ]{0,}([0-9.:mhs]+)/);
-		//End time
+		//Start time (exact date)
+		let dateResult = inString.match(/[ ]+(?:s|start|date|when)[ =]{0,}['"\()]{1,}([0-9a-zA-Z :\-\/\\]+)['"\)]{1,}/);
+		if (dateResult)
+			output['date'] = new Date(Date.parse(dateResult[1]));
+        //End time
+        let endResult = inString.match(/[ ]+(?:end|e)[ ]{0,}([0-9.:mhs]+)/);
 		if (endResult)
 			output['end'] = this.toSeconds(endResult[1]);
 		//Duration
-		let durResult = inString.match(/[ ]+(?:dur|len|d|duration|length|t|time)[ ]{0,}([0-9:mhs]+)/);
+		let durResult = inString.match(/[ ]+(?:dur|len|d|duration|length|t|time)[ ]{0,}([0-9.:mhs]+)/);
 		if (durResult)
 			output['duration'] = this.toSeconds(durResult[1]);
-
+		//Timetag
+		let ttagResult = inString.match(/[ ]+([0-9.:mhs]+)/);
+		if (ttagResult)
+			output['timetag'] = this.toSeconds(ttagResult[1]);
+		
 		//Effects
-		let effResult = inString.match(/[ ]+(echo|pot|telephone|telep|phone|tube|bath|can|iron|horn|pitch|pitchhigh|ph|pitchlow|pl|vibrato|vib|crying|cry|chorius|choir)([ ]{1,}[\-0-9.]{1,}|)([ ]{1,}[\-0-9.]{1,}|)/g);
+		let effResult = inString.match(/[ ]+(echo|pot|telephone|telep|phone|tube|bath|can|iron|horn|pitch|pitchhigh|ph|pitchlow|pl|vibrato|vib|crying|cry|chorus|choir)([ ]{1,}[\-0-9.]{1,}|)([ ]{1,}[\-0-9.]{1,}|)/g);
 		let afirAdded = false;
 
 		for (i in effResult) {
@@ -204,8 +238,8 @@ module.exports = {
 			else if (thisMatch = effResult[i].match(/(?:vibrato|vib|crying|cry)[ ]{0,}([\-0-9.]{0,})[ ]{0,}([\-0-9.]{0,})/)) {
 				effects.push(['vibrato', thisMatch[1] ? Number(thisMatch[1]) : 10, thisMatch[2] ? Number(thisMatch[2]) : 50]);
 			}
-			else if (thisMatch = effResult[i].match(/(?:chorius|choir)/)) {
-				effects.push(['chorius']);
+			else if (thisMatch = effResult[i].match(/(?:chorus|choir)/)) {
+				effects.push(['chorus']);
 			}
 		}
 		if (effects.length > 0)
@@ -215,7 +249,6 @@ module.exports = {
 
 	//Report filters into a string
 	flagsToString: function (flags) {
-		console.log("effects!");
 		let out = "";
 		if (Object.keys(flags).length > 0) {
 			if (flags['effects']) {
@@ -286,73 +319,232 @@ module.exports = {
 		});
 	},
 
-	//Add all effects from the list to ffmpeg command
-	addAudioEffects: function (ffmpegCommand, effects) {
-		let newCommand = ffmpegCommand;
-		let filterBuilder = new complexFilterBuild();
-		//First, add IR inputs and 'anullsrc' silence input for afir filter (can be only one)
+	//Build FFMPEG command
+	//	What's going on here:
+	//		Depending on mode ('concat' or 'mix') we need to apply filters in the following order
+	//		CONCAT (add up audios one after another)
+	//			ffmpeg -imp0 -inmRL -inpSilence -inp1 -inp2 -inpN -filter [concatInputs + concatIR][afir][other]
+	//		MIX (delay audios and mix them up)
+	//			ffmpeg -imp0 -inpRL -inpSilence -inp1 -inp2 -inpN -filter [delay1][delay2][delayN][amix][concatIR][afir][other]
+	buildFfmpegCommand: function (inputs, effects, mode='concat', effectCountLimit=0) {
+		//'inputs' structure
+		//[ { file:'some/file/name.mp3', delay:3251 },
+		//	{ file:'some/file/name.mp3', delay:3251 },
+		//	{ file:'some/file/name.mp3', delay:3251 } ] 
+		let inputsToMix = [];
+		let inputsToConcat = [];
+		let filters = [];
+		let afirPresented = false;
+		let nextInput = '0:0';
+
+		//Add first input
+		let ffcom = ffmpeg(inputs.shift().file);
+
+		//Add IR inputs and 'anullsrc' silence input for afir filter (can be only one) if we have any 'afir' effects
 		for (i in effects) {
 			if (effects[i][0] == 'afir') {
 				if (effects[i][1] == 'echo')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
 				else if (effects[i][1] == 'pot')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 				else if (effects[i][1] == 'telephone')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 				else if (effects[i][1] == 'tube')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
 				else if (effects[i][1] == 'bath')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
 				else if (effects[i][1] == 'can')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 				else if (effects[i][1] == 'iron')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 				else if (effects[i][1] == 'horn')
-					newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
 
 				//Concat source and silence input
-				filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
+				//filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
+				afirPresented = true;
 				break;
 			}
 		}
-		//Add effects to complexFilterBuild Class
+
+		//Add other inputs
+		for (i in inputs) {
+			ffcom = ffcom.input(inputs[i].file);
+		}
+
+		//Concat filters
+		if (mode == 'concat') {
+			inputsToConcat.push('0:0');
+			for (i in inputs) {
+				//If we added 'afir' filters, we have 2 additional inputs after 0:0, so add 3 to index number, otherwise add 1 (because first input is no longer in this array)
+				inputsToConcat.push((afirPresented ? Number(i) + 3 : Number(i)+1) + ':0');
+			}
+			if (afirPresented)
+				inputsToConcat.push('2:0');
+			if (inputsToConcat.length > 1) {
+				filters.push({
+					filter: 'concat', options: { v: 0, a: 1, n: inputsToConcat.length },
+					inputs: inputsToConcat, outputs: 'cnct'
+				});
+				nextInput = 'cnct';
+			}
+
+		}
+		//Delay and mix filters
+		else {
+			inputsToMix.push('0:0');
+			//'adelay' filter
+			for (i in inputs) {
+				let currIndex = afirPresented ? Number(i) + 3 : Number(i) + 1;
+				let delay = inputs[i]['delay'] ? inputs[i]['delay'] : 0;
+				filters.push({
+					filter: 'adelay', options: delay + '|' + delay,
+					inputs: currIndex + ':0', outputs: 'dv' + currIndex
+				});
+				filters.push({
+					filter: 'volume', options: inputs.length - Number(i),
+					inputs: 'dv' + currIndex, outputs: 'd' + currIndex
+				});
+				inputsToMix.push('d' + currIndex);
+			}
+			//'amix' filter
+			if (inputsToMix.length > 1) {
+				filters.push({
+					filter: 'amix', options: { inputs: inputsToMix.length, duration: 'longest', dropout_transition: 0 },
+					inputs: inputsToMix, outputs: 'mixOut'
+				});
+				//filters.push({
+				//	filter: 'volume', options: inputsToMix.length,
+				//	inputs: 'mixOutNv', outputs: 'mixOut'
+				//});
+				nextInput = 'mixOut';
+			}
+			//add concat here if we have afir filters
+			if (afirPresented) {
+				filters.push({
+					filter: 'concat', options: { v: 0, a: 1, n:2 },
+					inputs: [ nextInput, '2:0'], outputs: 'cnct'
+				});
+				nextInput = 'cnct';
+			}
+		}
+		//add other filters if we have any (including 'afir')
+		let effectCount = 0;
 		for (i in effects) {
+			effectCount++;
+			if (effectCountLimit > 0 && effectCount > effectCountLimit)
+				break;
 			if (effects[i][0] == 'pitch') {
 				let speed = (1 - effects[i][1] / 100);
 				if (speed < 0.5)
 					speed = 0.5;
-				//complexFilters.push('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
-				filterBuilder.addFilter('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
+				filters.push({ filter: 'asetrate', options: (48000 * (1 + effects[i][1] / 100)), inputs: nextInput, outputs: 'strt' });
+				filters.push({ filter: 'aresample', options: '48000', inputs: 'strt', outputs: 'rsmpl' });
+				filters.push({ filter: 'atempo', options: speed, inputs: 'rsmpl', outputs: 'e' + effectCount });
 			}
 			else if (effects[i][0] == 'vibrato')
-				filterBuilder.addFilter('vibrato=' + effects[i][1] + ':' + (effects[i][2] / 100));
-			else if (effects[i][0] == 'chorius')
-				filterBuilder.addFilter('chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3');
-			else if (effects[i][0] == 'afir') {
-				filterBuilder.addFilter('afir');
-			}
+				filters.push({ filter: 'vibrato', options: [ effects[i][1], (effects[i][2] / 100) ], inputs: nextInput, outputs: 'e' + effectCount });
+			else if (effects[i][0] == 'chorus')
+				filters.push({ filter: 'chorus', options: '0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3', inputs: nextInput, outputs: 'e' + effectCount });
+			else if (effects[i][0] == 'afir')
+				filters.push({ filter: 'afir', inputs: nextInput, outputs: 'e' + effectCount });
+			nextInput = 'e' + effectCount;
 		}
-		if (filterBuilder.output.length > 0)
-			newCommand = newCommand.complexFilter(filterBuilder.output).outputOptions('-map', "["+filterBuilder.endresult+"]");
-		return newCommand;
+		//Add mapping to the command if we have any filters
+		if (filters.length > 0)
+			ffcom = ffcom.complexFilter(filters).outputOptions('-map', "[" + nextInput + "]");
+		return ffcom;
 	},
 
+	////Add all effects from the list to ffmpeg command
+	//addAudioEffects: function (ffmpegCommand, effects, inputsToAttach=null) {
+	//	//inputsToAttach structure
+	//	//{	mode: 'concat' or 'mix',
+	//	//	list: [ { file:'some/file/name.mp3', delay:3251 },
+	//	//			{ file:'some/file/name.mp3', delay:3251 },
+	//	//			{ file:'some/file/name.mp3', delay:3251 } ] }
+
+	//	let newCommand = ffmpegCommand;
+	//	let filterBuilder = new complexFilterBuild();
+	//	//First, add IR inputs and 'anullsrc' silence input for afir filter (can be only one)
+	//	for (i in effects) {
+	//		if (effects[i][0] == 'afir') {
+	//			if (effects[i][1] == 'echo')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'pot')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'telephone')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'tube')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'bath')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'can')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'iron')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+	//			else if (effects[i][1] == 'horn')
+	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+
+	//			//Concat source and silence input
+	//			filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
+	//			break;
+	//		}
+	//	}
+	//	//Add effects to complexFilterBuild Class
+	//	for (i in effects) {
+	//		if (effects[i][0] == 'pitch') {
+	//			let speed = (1 - effects[i][1] / 100);
+	//			if (speed < 0.5)
+	//				speed = 0.5;
+	//			//complexFilters.push('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
+	//			filterBuilder.addFilter('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
+	//		}
+	//		else if (effects[i][0] == 'vibrato')
+	//			filterBuilder.addFilter('vibrato=' + effects[i][1] + ':' + (effects[i][2] / 100));
+	//		else if (effects[i][0] == 'chorus')
+	//			filterBuilder.addFilter('chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3');
+	//		else if (effects[i][0] == 'afir') {
+	//			filterBuilder.addFilter('afir');
+	//		}
+	//	}
+	//	if (filterBuilder.output.length > 0)
+	//		newCommand = newCommand.complexFilter(filterBuilder.output).outputOptions('-map', "["+filterBuilder.endresult+"]");
+	//	return newCommand;
+	//},
+
 	//Process stream
-	processStream: function (input, flags, opusBitrate=false) {
+	processStream: function (inputs, flags, mode = 'concat', opusBitrate=false) {
 		let self = this;
 		let effects = {};
 		if ('effects' in flags)
 			effects = flags.effects;
 
-		let command = ffmpeg(input);
-		command = this.addAudioEffects(command, effects);
-		
+		//let command = ffmpeg(inputs[0].file);
+		//command = this.addAudioEffects(command, effects);
+		let command = this.buildFfmpegCommand(inputs, effects, mode, config.ComplexFiltersAmountLimit);
+
 		const ffstream = new PassThrough();
 		if (opusBitrate)
 			command = command.format('s16le');
 		else
 			command = command.format('s16le').audioChannels(2).audioFrequency(48000);
-			command
+
+
+		//temp
+		//let pathParse = path.parse(inputs[0].file); //tmp
+		//let stopThis = false;
+		//function checkMem(period, firsttick = true, memAtStart = 0, max=0) {
+		//	let memUsedNow = process.memoryUsage().rss;
+		//	let memStart = firsttick ? memUsedNow : memAtStart;
+		//	let MaxThisFar = max < memUsedNow - memStart ? memUsedNow - memStart : max;
+		//	console.log("Memory monitor: Now: " + Math.round(memUsedNow / 1024 / 1024 * 100) / 100 + " Mb (" + (memUsedNow - memStart >= 0 ? "+":"")+ Math.round((memUsedNow - memStart) / 1024 / 1024 * 100) / 100+" Mb), Max: " + Math.round(MaxThisFar / 1024 / 1024 * 100) / 100+" Mb")
+		//	if (!stopThis)
+		//		setTimeout(() => { checkMem(period, false, memStart, MaxThisFar); }, period);
+		//}
+		//checkMem(100);
+
+		command
 			.on('error', function (err) {
 				self.report("ffmpeg reported error: " + err, 'r');
 				if (ffstream)
@@ -364,10 +556,18 @@ module.exports = {
 				//if (ffstream)
 				//	ffstream.end();
 			})
+			//.on('progress', function (progress) {
+			//	console.log('Processing: ' + Math.round(progress.percent) / 100 + '% done (' + progress.timemark + ') ' + progress.targetSize + ' Kb');
+			//})
 			.on('start', function (commandLine) {
 				if (config.logging.ConsoleReport.FfmpegDebug) self.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
 			})
 			.pipe(ffstream);
+			//.audioCodec('libmp3lame')
+			//.audioBitrate('320k')
+			//.output(path.resolve(__dirname, config.folders.Temp, flags.duration + "s_" + pathParse.name + '.mp3'))
+			//.run();
+		
 		return ffstream;
 	},
 
