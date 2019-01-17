@@ -549,6 +549,10 @@ module.exports = {
 				self.report("ffmpeg reported error: " + err, 'r');
 				if (ffstream)
 					ffstream.end();
+				
+				//command.kill('SIGSTOP');
+				//command.kill();
+				delete command;
 			})
 			.on('end', function (stdout, stderr) {
 				//if (stream)

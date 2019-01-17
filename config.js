@@ -91,6 +91,9 @@ module.exports = {
 	//Global volume limiter, this amount will be considered as 100% when using 'volume' command
 	VolumeBotGlobal: 100.0,
 
+	//Volume for new users (default starting value)
+	DefaultVolume: 20.0,
+
 	//Bot will automatically join a room with 'AutoJoinMembersAmount' or more members
 	AutoJoinTalkingRoom: true,
 

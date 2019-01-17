@@ -534,14 +534,16 @@ function playQueue(connection) {
 				let inputObject = PlayingQueue.shift();
 				if (inputObject.type == 'file') {
 					if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("inputObject.type PASSED", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
-					CurrentPlayingSound = { 'type': 'file', 'path': path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)), 'filename': inputObject.filename, 'duration': db.getSoundDuration(inputObject.filename), 'bitrate': db.getSoundBitrate(inputObject.filename), 'user': inputObject.user, 'flags': inputObject.flags };
+					CurrentPlayingSound = { 'type': 'file', 'path': path.resolve(__dirname, config.folders.Sounds, inputObject.filename), 'filename': inputObject.filename, 'duration': inputObject.duration, 'user': inputObject.user, 'flags': inputObject.flags };
 					if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
 					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
 					let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
-					let ffstream = utils.processStream([{ file: path.resolve(__dirname, config.folders.Sounds, inputObject.filename + db.getSoundExtension(inputObject.filename)) } ], inputObject.flags);
+					db.userPlayedSoundsInc(inputObject.user.id); //Increment value in DB for statistics
+					db.soundPlayedInc(inputObject.filename); //Increment value in DB for statistics
+					let ffstream = utils.processStream([{ file: path.resolve(__dirname, config.folders.Sounds, inputObject.filename) } ], inputObject.flags);
 					connection.playConvertedStream(ffstream, PlaybackOptions);
 
 					playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
@@ -557,6 +559,7 @@ function playQueue(connection) {
 					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
+					db.userPlayedRecsInc(inputObject.user.id); //Increment value in DB for statistics
 					let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, inputObject.searchresult.method);
 					connection.playConvertedStream(ffstream, PlaybackOptions);
 
@@ -578,6 +581,8 @@ function playQueue(connection) {
 					// sometimes its not working
 					if (inputObject.played && inputObject.played > 7000 && !config.UseAudioOnlyFilterForYoutube) YtOptions['begin'] = Math.floor(inputObject.played / 1000) + "s";
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " creating stream... for '" + inputObject["link"]+"'", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+
+					db.userPlayedYoutubeInc(inputObject.user.id); //Increment value in DB for statistics
 
 					//Create the stream
 					let stream = ytdl(inputObject["link"], YtOptions)
@@ -668,6 +673,7 @@ function handleQueue(reason) {
 
 client.on('ready', () => {
 	utils.report('Logged in as ' + client.user.tag + '!', 'g');
+	db.updateUsersDB(client.guilds.get(config.guildId).members);
 	BotReady = true;
 });
 /*client.on('debug', (message) => {
@@ -689,6 +695,7 @@ client.on('guildMemberAdd', member => {
 	client.guilds.get(config.guildId).fetchMember(member.id)
 		.then(() => {
 			if (config.logging.ConsoleReport.MembersJoiningUpdating) utils.report("New Member joined: '" + member.user.username + "' (" + member.id + ")!", 'b', config.logging.LogFileReport.MembersJoiningUpdating);
+			db.userUpdateAdd(member.id, member.user.username, member.nickname, config.DefaultVolume);
 		})
 		.catch(error => utils.report("Couldn't fetch a new member '" + member.user.username +"'. Error: " + error, 'r'));
 });
@@ -696,6 +703,7 @@ client.on('guildMemberUpdate', (OldMember, NewMember) => {
 	client.guilds.get(config.guildId).fetchMember(NewMember.id)
 		.then(() => {
 			if (config.logging.ConsoleReport.MembersJoiningUpdating) utils.report("Member updated: '" + NewMember.user.username + "' (" + NewMember.id + ")!", 'b', config.logging.LogFileReport.MembersJoiningUpdating);
+			db.userUpdateAdd(NewMember.id, NewMember.user.username, NewMember.nickname, config.DefaultVolume);
 		})
 		.catch(error => utils.report("Couldn't fetch a member update for '" + NewMember.user.username + "'. Error: " + error, 'r'));
 });
@@ -758,17 +766,23 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 
 //Login if everything is ready
 if (utils.checkFoldersExistance()) {
-	db.loadUsersDB();
-	db.loadSoundsDB();
-	db.loadRecDB();
-	db.scanSoundsFolder();
-	client.login(config.token);
-	//Check and update Records DB
-	db.RecordingsUpdateNeededCheck()
-		.then((err) => {
-			if (!err)
-				RecordsDBReady = true;
-		});
+	db.prepareDatabase()
+		.then(() => {
+			db.scanSoundsFolder();
+			client.login(config.token);
+
+			//Update Records DB
+			db.scanRecordingsFolder()
+				.then((err) => {
+					if (!err)
+						RecordsDBReady = true;
+				});
+		})
+		.catch(err => { utils.report("There was an error while preparing the database: "+err, 'r'); });
+	//db.loadUsersDB();
+	//db.loadSoundsDB();
+	//db.loadRecDB();
+
 }
 
 // =============== MESSAGE EVENTS ===============
@@ -814,9 +828,7 @@ client.on('message', async message => {
 								if (config.EnableSoundboard && checkPermission(guildMember, 6, message.channel)) {
 									if (message.channel.type != "dm")
 										sendInfoMessage("List sent in private!", message.channel);
-									let found = db.findSound('', true).sort(function (a, b) {
-										return a.localeCompare(b);
-									});
+									let found = db.getSoundsList();
 									let resultList = "";
 									for (i in found) {
 										resultList += config.CommandCharacter + found[i] + "\n";
@@ -1101,23 +1113,21 @@ client.on('message', async message => {
 									}
 									//This is probably a file
 									else if (checkPermission(guildMember, 2, message.channel)) {
-										let found = db.findSound(args[0]);
-										if (found.length == 1 || (!config.StrictAudioCommands && found.length > 1)) {
-											playbackMessage(":arrow_right: " + getUserTagName(message.author) + " added file to the queue: '" + found[0] + "'" + utils.flagsToString(additionalFlags) + " (duration " + utils.humanTime(db.getSoundDuration(found[0])) + ").");
-
-											//Sort the result first
-											let foundOrdered = found.sort(function (a, b) {
-												return a.localeCompare(b);
-											})
-											//Create Queue element
-											QueueElement = { 'type': 'file', 'filename': foundOrdered[0], 'user': guildMember, 'duration': db.getSoundDuration(foundOrdered[0]), 'flags': additionalFlags };
-											//Add to the queue
-											PlayingQueue.push(QueueElement);
-										}
-										else if (found.length > 1)
-											sendInfoMessage("More than one result found!", message.channel, message.author);
-										else
-											sendInfoMessage("There is no file with such name!", message.channel, message.author);
+										db.findSound(command)
+											.then(found => {
+												if (found.count == 1 || (!config.StrictAudioCommands && found.count > 1)) {
+													playbackMessage(":arrow_right: " + getUserTagName(message.author) + " added file to the queue: '" + found[0] + "'" + utils.flagsToString(additionalFlags) + " (duration " + utils.humanTime(db.getSoundDuration(found[0])) + ").");
+													
+													//Create Queue element
+													QueueElement = { 'type': 'file', 'filename': found.sound.filenameFull, 'user': guildMember, 'duration': found.sound.duration, 'flags': additionalFlags };
+													//Add to the queue
+													PlayingQueue.push(QueueElement);
+												}
+												else if (found.count > 1)
+													sendInfoMessage("More than one result found!", message.channel, message.author);
+												else
+													sendInfoMessage("There is no file with such name!", message.channel, message.author);
+											});
 									}
 								}
 								break;
@@ -1179,44 +1189,42 @@ client.on('message', async message => {
 								if (config.EnableSoundboard) {
 									if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand", 'start') + " Recieved command!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 									//Requested a local sound playback
-									let found = db.findSound(command);
-									if (found.length == 1 || (!config.StrictAudioCommands && found.length > 1)) {
-										if (checkPermission(guildMember, 2, message.channel)) {
-											prepareForPlaybackOnChannel(guildMember)
-												.then((connection) => {
-													if (connection) {
-														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-														//Sort the result first
-														let foundOrdered = found.sort(function (a, b) {
-															return a.localeCompare(b);
-														});
-														//Create Queue element
-														QueueElement = { 'type': 'file', 'filename': foundOrdered[0], 'user': guildMember, 'duration': db.getSoundDuration(foundOrdered[0]), 'flags': additionalFlags };
+									db.findSound(command)
+										.then(found => {
+											if (found.count == 1 || (!config.StrictAudioCommands && found.count > 1)) {
+												if (checkPermission(guildMember, 2, message.channel)) {
+													prepareForPlaybackOnChannel(guildMember)
+														.then((connection) => {
+															if (connection) {
+																if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																
+																//Create Queue element
+																QueueElement = { 'type': 'file', 'filename': found.sound.filenameFull, 'user': guildMember, 'duration': found.sound.duration, 'flags': additionalFlags };
 
-														//If something is playing right now
-														if (soundIsPlaying) {
-															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Stopping playback!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-															//Stop or pause the playback (depending on length of playing sound)
-															stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration && db.getSoundDuration(foundOrdered[0]) < config.LongSoundDuration));
-															//Add to the front position in queue
-															PlayingQueue.unshift(QueueElement);
-															//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
-														}
-														//Nothing is playing right now
-														else {
-															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-															PlayingQueue.unshift(QueueElement);
-															handleQueue('newSoundRequest');
-														}
-													}
-												});
-										}
-									}
-									else if (found.length > 1)
-										sendInfoMessage("More than one result found!", message.channel, message.author);
-									else
-										sendInfoMessage("Unknown command! Type **" + config.CommandCharacter + "help**" + (config.RestrictCommandsToSingleChannel ? " in the <#" + config.ReportChannelId + "> channel or in DM" : "") + " to see instructions on how to use this bot.", message.channel, message.author);
-									
+																//If something is playing right now
+																if (soundIsPlaying) {
+																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Stopping playback!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																	//Stop or pause the playback (depending on length of playing sound)
+																	stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration && found.sound.duration < config.LongSoundDuration));
+																	//Add to the front position in queue
+																	PlayingQueue.unshift(QueueElement);
+																	//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+																}
+																//Nothing is playing right now
+																else {
+																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																	PlayingQueue.unshift(QueueElement);
+																	handleQueue('newSoundRequest');
+																}
+															}
+														});
+												}
+											}
+											else if (found.count > 1)
+												sendInfoMessage("More than one result found!", message.channel, message.author);
+											else
+												sendInfoMessage("Unknown command! Type **" + config.CommandCharacter + "help**" + (config.RestrictCommandsToSingleChannel ? " in the <#" + config.ReportChannelId + "> channel or in DM" : "") + " to see instructions on how to use this bot.", message.channel, message.author);
+										});
 								}
 								else
 									sendInfoMessage("Unknown command! Type **" + config.CommandCharacter + "help**" + (config.RestrictCommandsToSingleChannel ? " in the <#" + config.ReportChannelId + "> channel or in DM" : "") + " to see instructions on how to use this bot.", message.channel, message.author);
@@ -1262,7 +1270,12 @@ client.on('message', async message => {
 														utils.moveFile(dest, path.resolve(__dirname, config.folders.Sounds, nameClean))
 															.then(() => {
 																message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
-																db.scanSoundsFolder();
+																db.userUploadedSoundsInc(message.author.id); //Increment value in DB for statistics
+																utils.checkAudioFormat(path.resolve(__dirname, config.folders.Sounds, nameClean))
+																	.then(resultNew => {
+																		db.soundUpdateAdd(nameClean, resultNew['metadata']['format']['duration'], fs.statSync(path.resolve(__dirname, config.folders.Sounds, nameClean)).size, resultNew['metadata']['format']['bitrate'], message.author.id);
+																	});
+																//db.scanSoundsFolder();
 															})
 															.catch(err => {
 																message.reply("There was an error while performing server operations! Operation was not finished.");
@@ -1286,7 +1299,12 @@ client.on('message', async message => {
 																utils.moveFile(outputFile, path.resolve(__dirname, config.folders.Sounds, nameClean))
 																	.then(() => {
 																		message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
-																		db.scanSoundsFolder();
+																		db.userUploadedSoundsInc(message.author.id); //Increment value in DB for statistics
+																		utils.checkAudioFormat(path.resolve(__dirname, config.folders.Sounds, nameClean))
+																			.then(resultNew => {
+																				db.soundUpdateAdd(nameClean, resultNew['metadata']['format']['duration'], fs.statSync(path.resolve(__dirname, config.folders.Sounds, nameClean)).size, resultNew['metadata']['format']['bitrate'], message.author.id);
+																			});
+																		//db.scanSoundsFolder();
 																	})
 																	.catch(err => {
 																		message.reply("There was an error while performing server operations! Operation was not finished.");
@@ -1315,7 +1333,12 @@ client.on('message', async message => {
 																utils.moveFile(outputFile, path.resolve(__dirname, config.folders.Sounds, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer))
 																	.then(() => {
 																		message.reply("File added! Now you can play it using **" + config.CommandCharacter + nameCleanNoExtension + "** command.");
-																		db.scanSoundsFolder();
+																		db.userUploadedSoundsInc(message.author.id); //Increment value in DB for statistics
+																		utils.checkAudioFormat(path.resolve(__dirname, config.folders.Sounds, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer))
+																			.then(resultNew => {
+																				db.soundUpdateAdd(nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer, resultNew['metadata']['format']['duration'], fs.statSync(path.resolve(__dirname, config.folders.Sounds, nameCleanNoExtension + "." + config.ConvertUploadedAudioContainer)).size, resultNew['metadata']['format']['bitrate'], message.author.id);
+																			});
+																		//db.scanSoundsFolder();
 																	})
 																	.catch(err => {
 																		message.reply("There was an error while performing server operations! Operation was not finished.");

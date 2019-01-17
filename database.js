@@ -21,6 +21,10 @@ const path = require('path');
 const utils = require('./utils.js');
 const ffmpeg = require('fluent-ffmpeg');
 const async = require("async");
+const sqlite3 = require('sqlite3').verbose();
+//var db = new sqlite3.Database('sqlite.db');
+var db = new sqlite3.Database(':memory:');
+
 
 //Private variables
 var usersDB = {};
@@ -33,390 +37,400 @@ var RecUpdateInQueue = false;
 
 // ===== Private functions =====
 
+
 //Update or create the database file
-function updateDBFile(filename, DB) {
-	let fileToCreate = path.resolve(__dirname, config.folders.Database, filename);
-	if (fs.existsSync(fileToCreate)) {
-		//Detele the file if it exists first
-		fs.unlink(fileToCreate, err => {
-			if (err) {
-				utils.report("Couldn't delete database file '" + fileToCreate + "', check permissions! Error: " + err, 'r');
-				return false;
-			}
-		});
-	}
-	//Stringify the database object
-	let json = JSON.stringify(DB);
-	fs.writeFile(fileToCreate, json, 'utf8', err => {
-		if (err) {
-			utils.report("Couldn't create database file '" + fileToCreate + "', check permissions! Error: " + err, 'r');
-			return false;
-		}
-		else return true;
-	});
-}
+//function updateDBFile(filename, DB) {
+//	let fileToCreate = path.resolve(__dirname, config.folders.Database, filename);
+//	if (fs.existsSync(fileToCreate)) {
+//		//Detele the file if it exists first
+//		fs.unlink(fileToCreate, err => {
+//			if (err) {
+//				utils.report("Couldn't delete database file '" + fileToCreate + "', check permissions! Error: " + err, 'r');
+//				return false;
+//			}
+//		});
+//	}
+//	//Stringify the database object
+//	let json = JSON.stringify(DB);
+//	fs.writeFile(fileToCreate, json, 'utf8', err => {
+//		if (err) {
+//			utils.report("Couldn't create database file '" + fileToCreate + "', check permissions! Error: " + err, 'r');
+//			return false;
+//		}
+//		else return true;
+//	});
+//}
 
-function setRecordProperty (DB, key, property, value = '+') {
-	//Key exists in the DB
-	if (DB[key]) {
-		//If we want to increment the value
-		if (value == '+') {
-			//Read the old value if it exists
-			//let thisVal = 0;
-			if (DB[key][property])
-				DB[key][property]++;
-			else
-				DB[key][property] = 1;
-		}
-		else {
-			//Replace the value by a new one
-			DB[key][property] = value;
-		}
-	}
-	//Key does not exist, add new record
-	else {
-		DB[key] = {};
-		if (value == '+')
-			DB[key][property] = 1;
-		else
-			DB[key][property] = value;
-	}
-	//Update the DB files
-	if (DB == usersDB)
-		updateDBFile('users.json', DB);
-	else if (DB == soundsDB)
-		updateDBFile('sounds.json', DB);
-}
+//function setRecordProperty (DB, key, property, value = '+') {
+//	//Key exists in the DB
+//	if (DB[key]) {
+//		//If we want to increment the value
+//		if (value == '+') {
+//			//Read the old value if it exists
+//			//let thisVal = 0;
+//			if (DB[key][property])
+//				DB[key][property]++;
+//			else
+//				DB[key][property] = 1;
+//		}
+//		else {
+//			//Replace the value by a new one
+//			DB[key][property] = value;
+//		}
+//	}
+//	//Key does not exist, add new record
+//	else {
+//		DB[key] = {};
+//		if (value == '+')
+//			DB[key][property] = 1;
+//		else
+//			DB[key][property] = value;
+//	}
+//	//Update the DB files
+//	if (DB == usersDB)
+//		updateDBFile('users.json', DB);
+//	else if (DB == soundsDB)
+//		updateDBFile('sounds.json', DB);
+//}
 
-//Get value from a Database or return default value if it does not exists
-function getValueFromDB(DB, key, property, defaultValue = 0) {
-	if (DB[key]) {
-		if (DB[key][property]) {
-			return DB[key][property];
-		}
-		else return defaultValue;
-	}
-	else return defaultValue;
-}
+////Get value from a Database or return default value if it does not exists
+//function getValueFromDB(DB, key, property, defaultValue = 0) {
+//	if (DB[key]) {
+//		if (DB[key][property]) {
+//			return DB[key][property];
+//		}
+//		else return defaultValue;
+//	}
+//	else return defaultValue;
+//}
 
-function loop_FilesFfmpegCheck(array, folder, currentIndex, callback, endcallb) {
-	if (array.length > currentIndex) {
-		utils.checkAudioFormat(path.resolve(__dirname, folder, array[currentIndex]))
-			.then(result => {
-				callback(array[currentIndex], currentIndex, result);
-				loop_FilesFfmpegCheck(array, folder, currentIndex + 1, callback, endcallb);
-			})
-			.catch(err => {
-				utils.report("Couldn't execute ffprobe on '" + array[currentIndex] + "' file. Reason: " + err, 'y');
-				callback(array[currentIndex], currentIndex, null);
-				loop_FilesFfmpegCheck(array, folder, currentIndex + 1, callback, endcallb);
-			});
-	}
-	else
-		endcallb();
+//function loop_FilesFfmpegCheck(array, folder, currentIndex, callback, endcallb) {
+//	if (array.length > currentIndex) {
+//		utils.checkAudioFormat(path.resolve(__dirname, folder, array[currentIndex]))
+//			.then(result => {
+//				callback(array[currentIndex], currentIndex, result);
+//				loop_FilesFfmpegCheck(array, folder, currentIndex + 1, callback, endcallb);
+//			})
+//			.catch(err => {
+//				utils.report("Couldn't execute ffprobe on '" + array[currentIndex] + "' file. Reason: " + err, 'y');
+//				callback(array[currentIndex], currentIndex, null);
+//				loop_FilesFfmpegCheck(array, folder, currentIndex + 1, callback, endcallb);
+//			});
+//	}
+//	else
+//		endcallb();
+//}
+
+function handleError(error) {
+	if (error) utils.report("SQLITE error: " + error, 'r');
 }
 
 module.exports = {
 
+	//Create all tables or make sure they exist
+	prepareDatabase: function (reportStats = true) {
+		return new Promise((resolve, reject) => {
+			db.serialize(() => {
+				let checkedCount = 0;
+				function dbIsReady() {
+					checkedCount++;
+					if (checkedCount == 8) {
+						if (reportStats) {
+							//db.get("SELECT count(*) cnt from `users`", { $id: 2, $name: "bar" });
+							db.get("SELECT count(*) AS 'count' from `users`", (err, row) => { if (!err) utils.report("Loaded " + row.count + " records from 'users' database.", 'w'); });
+							db.get("SELECT count(*) AS 'count', SUM('size') AS 'size', SUM('duration') AS 'duration' from `sounds`", (err, row) => { if (!err) utils.report("Loaded " + row.count + " records from 'sounds' database." + (row.count ? "(Duration " + Math.floor(row.duration / 6000) / 100 + " minutes, size " + Math.floor(100 * row.size / 1048576) / 100 + " Mb)":""), 'w'); });
+							db.get("SELECT count(*) AS 'count', SUM('size') AS 'size', SUM('duration') AS 'duration' from `recordings`", (err, row) => { if (!err) utils.report("Loaded " + row.count + " records from 'recordings' database." + (row.count ? "(Duration " + Math.floor(row.duration / 36000) / 100 + " hours, size " + Math.floor(100 * row.size / 1048576) / 100 + " Mb)" : ""), 'w'); });
+						}
+						return resolve();
+					}
+				}
+
+				//Tables
+				db.run('CREATE TABLE IF NOT EXISTS `permissions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `UserOrRole_Id` INTEGER, `thisIsUser` INTEGER DEFAULT 0, `permissions` INTEGER )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+				db.run('CREATE TABLE IF NOT EXISTS "recordings" ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `filename` TEXT UNIQUE, `startTime` INTEGER, `userId` INTEGER, `duration` INTEGER, `size` INTEGER, `exists` INTEGER DEFAULT 1, `hidden` INTEGER DEFAULT 0 )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+				db.run('CREATE TABLE IF NOT EXISTS `settings` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `guildId` INTEGER, `enableSB` INTEGER, `enableRec` INTEGER, `ReportChannelId` INTEGER )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+				db.run('CREATE TABLE IF NOT EXISTS "sounds" ( `filenameFull` TEXT UNIQUE, `filename` TEXT, `extension` TEXT, `volume` REAL DEFAULT 100, `duration` REAL DEFAULT 0, `size` INTEGER DEFAULT 0, `bitrate` REAL DEFAULT 0, `playedCount` INTEGER DEFAULT 0, `uploadedBy` INTEGER DEFAULT 0, `uploadDate` INTEGER, `lastTimePlayed` INTEGER, `exists` INTEGER DEFAULT 1, PRIMARY KEY(`filenameFull`) )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+				db.run('CREATE TABLE IF NOT EXISTS "users" ( `userid` INTEGER UNIQUE, `name` TEXT, `guildName` TEXT, `volume` REAL DEFAULT 20.0, `playedSounds` INTEGER DEFAULT 0, `playedYoutube` INTEGER DEFAULT 0, `playedRecordings` INTEGER DEFAULT 0, `lastCommand` INTEGER, `lastRecording` INTEGER, `recDuration` INTEGER DEFAULT 0, `recFilesCount` INTEGER DEFAULT 0, `uploadedSounds` INTEGER DEFAULT 0, PRIMARY KEY(`userid`) )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+
+				//Indexes
+				db.run('CREATE INDEX IF NOT EXISTS `permissions_Id` ON `permissions` ( `UserOrRole_Id` )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+				db.run('CREATE INDEX IF NOT EXISTS `rec_startTime_idx` ON `recordings` ( `startTime` )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+				db.run('CREATE INDEX IF NOT EXISTS `sounds_filename_idx` ON `sounds` ( `filename` )', (res, err) => { if (!err) dbIsReady(); else return reject(err); });
+
+			});
+		});
+	},
+
 	// =========== USERS ===========
 	/* DB structure
-		'userid': {
-			'volume': 100.0,
-			'playedSounds': 0,
-			'playedYoutube': 0,
-			'uploadedSounds': 0,
+		`userid`	INTEGER UNIQUE,
+		`name`	TEXT,
+		`guildName`	TEXT,
+		`volume`	REAL DEFAULT 20.0,
+		`playedSounds`	INTEGER DEFAULT 0,
+		`playedYoutube`	INTEGER DEFAULT 0,
+		`playedRecordings`	INTEGER DEFAULT 0,
+		`lastCommand`	INTEGER,
+		`lastRecording`	INTEGER,
+		`recDuration`	INTEGER DEFAULT 0,
+		`recFilesCount`	INTEGER DEFAULT 0,
+		`uploadedSounds`	INTEGER DEFAULT 0,      */
+	
+	//Update or add a single user
+	userUpdateAdd: function (userid, name, guildname, volume) {
+		db.run('INSERT INTO "users" (userid, "name", guildname, volume) VALUES ($userid, $name, $guildname, $volume) ON CONFLICT(userid) DO UPDATE SET "name"= $name, guildname=$guildname', { $userid: userid, $name: name, $guildname: guildname ? guildname : name, $volume: volume }, handleError);
+	},
 
-		}                                 */
-
-	//Read DB file and store it in the variable
-	loadUsersDB: function () {
-		if (fs.existsSync(path.resolve(__dirname, config.folders.Database, 'users.json'))) {
-			usersDB = require(path.resolve(__dirname, config.folders.Database, 'users.json'));
-			utils.report("Loaded " + Object.keys(usersDB).length + " records from 'users.json' database.", 'w');
-		}
-		else
-			utils.report("'users.json' database does not exist. Using empty list.", 'y');
+	//Update users database
+	updateUsersDB: function (members) {
+		let count = 0;
+		members.forEach((member, key, map) => {
+			this.userUpdateAdd(member.id, member.user.username, member.nickname, config.DefaultVolume);
+			count++;
+		});
+		utils.report("Updated " + count + " records in 'users' database.", 'g');
 	},
 
 	getUserVolume: function (userid) {
-		return getValueFromDB(usersDB, userid, 'volume', 100.00);
+		db.get("SELECT volume from `users` WHERE userid=$userid", { $userid: userid }, (err, row) => {
+			if (row.volume > 0) return row.volume;
+			else return config.DefaultVolume;
+		});
 	},
-	setUserVolume: function (userid, value) { setRecordProperty(usersDB, userid, 'volume', value); },
-	userPlayedSoundsInc: function (userid) { setRecordProperty(usersDB, userid, 'playedSounds', '+'); },
-	userPlayedYoutubeInc: function (userid) { setRecordProperty(usersDB, userid, 'playedYoutube', '+'); },
-	userUploadedSoundsInc: function (userid) { setRecordProperty(usersDB, userid, 'uploadedSounds', '+'); },
+	setUserVolume: function (userid, value) { db.run('UPDATE "users" SET volume = $volume, lastCommand=$date WHERE userid = $userid', { $userid: userid, $volume: volume, $date: Date.now() }, handleError); },
+	userPlayedSoundsInc: function (userid) { db.run('UPDATE "users" SET playedSounds = playedSounds+1, lastCommand=$date WHERE userid = $userid', { $userid: userid, $date: Date.now() }, handleError); },
+	userPlayedYoutubeInc: function (userid) { db.run('UPDATE "users" SET playedYoutube = playedYoutube+1, lastCommand=$date WHERE userid = $userid', { $userid: userid, $date: Date.now() }, handleError); },
+	userPlayedRecsInc: function (userid) { db.run('UPDATE "users" SET playedRecordings = playedRecordings+1, lastCommand=$date WHERE userid = $userid', { $userid: userid, $date: Date.now() }, handleError); },
+	userUploadedSoundsInc: function (userid) { db.run('UPDATE "users" SET uploadedSounds = uploadedSounds+1 WHERE userid = $userid', { $userid: userid }, handleError); },
 
-	getUserPlayedSounds: function (userid) { return getValueFromDB(usersDB, userid, 'playedSounds', 0); },
-	getUserPlayedYoutube: function (userid) { return getValueFromDB(usersDB, userid, 'playedYoutube', 0); },
-	getUserUploadedSounds: function (userid) { return getValueFromDB(usersDB, userid, 'uploadedSounds', 0); },
+	getUserPlayedSounds: function (userid) { db.get("SELECT playedSounds from `users`", (err, row) => { if (!err) return row.playedSounds; else return 0; }); },
+	getUserPlayedYoutube: function (userid) { db.get("SELECT playedYoutube from `users`", (err, row) => { if (!err) return row.playedYoutube; else return 0; }); },
+	getUserUploadedSounds: function (userid) { db.get("SELECT uploadedSounds from `users`", (err, row) => { if (!err) return row.uploadedSounds; else return 0; }); },
 
 	// =========== SOUNDS ===========
 	/* DB structure
-		'filename': {
-			'extension': 'mp3'
-			'volume': 100.0,  <== Global sound multiplier
-			'duration': 0,
-			'size': 0,
-			'playedCount': 0,
-			'uploadedBy': "000000000000000000",
-			'uploadDate': 0,
+		`filenameFull`	TEXT UNIQUE,
+		`filename`	TEXT,
+		`extension`	TEXT,
+		`volume`	REAL DEFAULT 100,
+		`duration`	REAL DEFAULT 0,
+		`size`	INTEGER DEFAULT 0,
+		`bitrate`	REAL DEFAULT 0,
+		`playedCount`	INTEGER DEFAULT 0,
+		`uploadedBy`	INTEGER DEFAULT 0,
+		`uploadDate`	INTEGER,
+		`lastTimePlayed`	INTEGER,
+		`exists`	INTEGER DEFAULT 1,           */
 
-		}                                 */
+	//Update or add a single sound record
+	soundUpdateAdd: function (filenameFull, duration, size, bitrate, uploadedBy=0) {
+		let fileNameParse = path.parse(filenameFull);
+		db.run('INSERT INTO "sounds" (filenameFull, filename, extension, duration, size, bitrate, uploadedBy, uploadDate) VALUES ($filenameFull, $filename, $extension, $duration, $size, $bitrate, $uploadedBy, $uploadDate) ON CONFLICT(filenameFull) DO UPDATE SET filename=$filename, extension=$extension, duration=$duration, size=$size, `exists`=1', { $filenameFull: filenameFull, $filename: fileNameParse.name, $extension: fileNameParse.ext, $duration: duration, $size: size, $uploadedBy: uploadedBy, $uploadDate: Date.now(), $bitrate: bitrate }, handleError);
+	},
 
 	//Update list of files and make sure we have it in the DB
 	scanSoundsFolder: function () {
-		fs.readdir(path.resolve(__dirname, config.folders.Sounds), (err, files) => {
-			let checkCount = 0;
-			async.eachLimit(files, config.FfmpegParallelProcLimit, (file, callback) => {
-				checkCount++;
-				utils.checkAudioFormat(path.resolve(__dirname, config.folders.Sounds, file))
-					.then(result => {
-						let fileNameParse = path.parse(file);
-						if (result['mode'] != 'none') {
-							//Update the database record for this file
-							//File has record in the DB
-							if (!soundsDB[fileNameParse.name]) soundsDB[fileNameParse.name] = {};
-							soundsDB[fileNameParse.name]['extension'] = fileNameParse.ext;
-							if (result['metadata'].format) {
-								soundsDB[fileNameParse.name]['duration'] = result['metadata'].format.duration;
-								soundsDB[fileNameParse.name]['size'] = result['metadata'].format.size;
-								soundsDB[fileNameParse.name]['bitrate'] = result['metadata'].format.bit_rate;
-							}
-							soundsDB[fileNameParse.name]['checked'] = true;
-						}
-						callback();
-					})
-					.catch(err => {
-						utils.report("Couldn't execute ffprobe on '" + file + "' file. Reason: " + err, 'y');
-						callback();
+		db.run('UPDATE "sounds" SET `exists` = 0 WHERE 1', (res, err) => {
+			if (!err) {
+				fs.readdir(path.resolve(__dirname, config.folders.Sounds), (err, files) => {
+					let checkCount = 0;
+					async.eachLimit(files, config.FfmpegParallelProcLimit, (file, callback) => {
+						checkCount++;
+						utils.checkAudioFormat(path.resolve(__dirname, config.folders.Sounds, file))
+							.then(result => {
+								let fileNameParse = path.parse(file);
+								if (result['mode'] != 'none' && result['metadata'].format) 
+									//Update the database record for this file
+									this.soundUpdateAdd(file, result['metadata'].format.duration, result['metadata'].format.size, result['metadata'].format.bit_rate);
+								callback();
+							})
+							.catch(err => {
+								utils.report("Couldn't execute ffprobe on '" + file + "' file. Reason: " + err, 'y');
+								callback();
+							});
+					}, () => {
+						utils.report("Found " + checkCount + " sound files, Database updated!", 'g');
 					});
-			}, () => {
-				utils.report("Found " + checkCount + " sound files! Updating the database...", 'g');
-				for (var key in soundsDB) {
-					if (!soundsDB[key]['checked']) {
-						delete soundsDB[key];
-						utils.report("Deleting sounds DB record '" + key + "', file does not exists anymore.", 'y');
-					}
-					else delete soundsDB[key]['checked'];
-
-				}
-				//update the database file
-				updateDBFile('sounds.json', soundsDB);
-			});
-		})
-	},
-	//Read DB file and store it in the variable
-	loadSoundsDB: function() {
-		if (fs.existsSync(path.resolve(__dirname, config.folders.Database, 'sounds.json'))) {
-			soundsDB = require(path.resolve(__dirname, config.folders.Database, 'sounds.json'));
-			utils.report("Loaded " + Object.keys(soundsDB).length + " records from 'sounds.json' database.", 'w');
-		}
-		else
-			utils.report("'sounds.json' database does not exist. Using empty list.", 'y');
-	},
-
-	getSoundVolume: function (filename) { return getValueFromDB(soundsDB, filename, 'volume', 100.0); },
-	setSoundVolume: function (filename, value) { setRecordProperty(soundsDB, filename, 'volume', value); },
-	getSoundExtension: function (filename) { return getValueFromDB(soundsDB, filename, 'extension', 'mp3'); },
-	getSoundDuration: function (filename) { return getValueFromDB(soundsDB, filename, 'duration', 0.0); },
-	getSoundSize: function (filename) { return getValueFromDB(soundsDB, filename, 'size', 0.0); },
-	getSoundBitrate: function (filename) { return getValueFromDB(soundsDB, filename, 'bitrate', 0.0); },
-
-	//return filename array of a sound by full or partial search request
-	findSound: function (search, all = false) {
-		let result = [];
-		//First, search for a full name
-		for (var key in soundsDB) {
-			if (key.toLowerCase() == search.toLowerCase() || all)
-				result.push(key);
-		}
-		if (result.length == 0) {
-			//Nothing was found, search for partial name
-			for (var key in soundsDB) {
-				if (key.toLowerCase().indexOf(search.toLowerCase()) != -1) {
-					result.push(key);
-				}
+				})
 			}
-		}
-		return result;
+		});
+	},
+
+	setSoundVolume: function (filename, value) { db.run('UPDATE `sounds` SET volume = $value WHERE filenameFull = $filenameFull', { $filenameFull: filename, $value: value }, handleError); },
+	soundPlayedInc: function (filename) { db.run('UPDATE `sounds` SET playedCount = playedCount+1, lastTimePlayed=$lastTimePlayed WHERE filenameFull = $filenameFull', { $filenameFull: filename, $lastTimePlayed: Date.now() }, handleError); },
+
+
+	//Return filename array of a sound by full or partial search request
+	findSound: function (search) {
+		return new Promise((resolve, reject) => {
+			let result = {};
+			//First, search for a full name
+			db.get("SELECT filenameFull, filename, extension, volume, duration, `size`, bitrate, playedCount, uploadedBy, uploadDate, lastTimePlayed from `sounds` WHERE filename=$filename AND `exists`=1", { $filename: search }, (err, row) => {
+				//Found exact match
+				if (row && !err) {
+					result['count'] = 1;
+					result['sound'] = row;
+					return resolve(result);
+				}
+				else {
+					db.all("SELECT filenameFull, filename, extension, volume, duration, size, bitrate, playedCount, uploadedBy, uploadDate, lastTimePlayed from `sounds` WHERE filename like '%" + search.toLowerCase() +"%' AND `exists`=1 ORDER BY filename ASC", [], (errL, rows) => {
+						if (rows.length > 0 && !errL) {
+							result['count'] = rows.length;
+							result['sound'] = rows[0];
+							return resolve(result);
+						}
+						else
+							return resolve(result);
+					});
+				}
+			});
+		});
+	},
+
+	//Return list of all sounds in DB
+	getSoundsList: function () {
+		return new Promise((resolve, reject) => {
+			let result = [];
+			db.all("SELECT filename WHERE `exists`=1 ORDER BY filename ASC", [], (errL, rows) => {
+				if (rows.length > 0 && !errL) {
+					rows.forEach(row => {
+						result.push(row.filename);
+					});
+					return resolve(result);
+				}
+				else
+					return resolve(result);
+			});
+		});
 	},
 
 	// =========== VOICE RECORDINGS ===========
-	/* DB structure
-		'filename': {
-			'UserId': '654654654654'
-			'startTime': 456546546,
-			'duration': 1001,
-			'extension': 'webm',
-			'size': 4654654,
-		}                                 */
-	//Read DB file and store it in the variable
-	loadRecDB: function () {
-		if (fs.existsSync(path.resolve(__dirname, config.folders.Database, 'recordings.json'))) {
-			recDB = require(path.resolve(__dirname, config.folders.Database, 'recordings.json'));
-			let totalSize = 0;
-			let totalDuration = 0;
-			for (i in recDB) {
-                totalSize += recDB[i]['size'] ? recDB[i]['size'] : 0;
-				totalDuration += recDB[i]['duration'] ? recDB[i]['duration'] : 0;
-			}
-			utils.report("Loaded " + Object.keys(recDB).length + " records from 'recordings.json' database. (Total recordings duration " + Math.floor(totalDuration / 36000) / 100 + " hours, size " + Math.floor(100 * totalSize / 1048576) / 100 + " Mb).", 'w');
-        }
-		else
-			utils.report("'recordings.json' database does not exist. Using empty list.", 'y');
-    },
+	/* DB structure 'recordings'
+		`id`	INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+		`filename`	TEXT UNIQUE,
+		`startTime`	INTEGER,
+		`userId`	INTEGER,
+		`duration`	INTEGER,
+		`size`	INTEGER,
+		`exists`	INTEGER DEFAULT 1,
+		`hidden`	INTEGER DEFAULT 0                     */
+
 
     //Get first and last date for list of users (or all users if none provided)
     getRecDates: function (users=[]) {
         let output = { first:0, last:0, count:0, random:0 };
+		let addition = " WHERE ";
+		for (i in users) addition += "userId='" + users[i] + "' OR ";
+		if (addition.length)
+			addition = addition.slice(0, addition.length - 4);
 
-        for (i in recDB) {
-            if (users.length == 0 || users.indexOf(recDB[i]['UserId']) > -1) {
-                if (output.first == 0) output.first = recDB[i]['startTime'];
-                output.last = recDB[i]['startTime'];
-                output.count++;
-            }
-        }
-        output.random = Math.floor(Math.random() * (output.last - output.first)) + output.first;
+		db.get("SELECT MIN(startTime) AS 'min', MAX(startTime) AS 'max', COUNT(*) AS 'count' FROM `recordings`" + (addition.length ? addition : ""), [], (err, row) => {
+			//Found exact match
+			if (row && !err) {
+				output.first = row.min;
+				output.last = row.max;
+				output.count = row.count;
+				output.random = Math.floor(Math.random() * (output.last - output.first)) + output.first;
+				return output;
+			}
+			else
+				return output;
+		});
+        
         return output;
     },
+
+	//Add or update recording in DB
+	recordingUpdateAdd: function (filename, startTime, userId, duration, size) {
+		return new Promise((resolve, reject) => {
+			db.run('INSERT INTO "recordings" (filename, startTime, userId, duration, size) VALUES ($filename, $startTime, $userId, $duration, $size) ON CONFLICT(filename) DO UPDATE SET startTime=$startTime, userId=$userId, duration=$duration, size=$size, `exists`=1', { $filename: filename, $startTime: startTime, $userId: userId, $duration: duration, $size: size }, (res, err) => {
+				if (err) {
+					handleError(err);
+					return resolve();
+				}
+				else
+					return resolve();
+			});
+		});
+	},
+
+	//Add recording to DB (when we know its a new one for sure)
+	recordingAdd: function (file, startTime, duration, userId, size) {
+		db.run('INSERT INTO "recordings" (filename, startTime, userId, duration, size) VALUES ($filename, $startTime, $userId, $duration, $size)', { $filename: file, $startTime: startTime, $userId: userId, $duration: duration, $size: size }, handleError);
+	},
 
 	//Scan RecordingsFolder and update recDB
 	scanRecordingsFolder: function () {
 		return new Promise((resolve, reject) => {
-			fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
-				let checkCount = 0;
-				let lastReportTime = 0;
-				let totalDuration = 0;
-				let totalSize = 0;
-				//Run FFMPEG check to find out duration
-				async.eachLimit(files, config.FileScanParallelLimit, (file, callback) => {
-					checkCount++;
-					let fileNameParse = path.parse(file);
-					if (!recDB[fileNameParse.name]) recDB[fileNameParse.name] = {};
-					recDB[fileNameParse.name]['extension'] = fileNameParse.ext;
-					//Parse the filename for date and userId
-					let parsed = fileNameParse.name.match(/([0-9]{4})\-([0-9]+)\-([0-9]+)_([0-9]+)\-([0-9]+)\-([0-9]+)_([0-9]+)[_]+([0-9]+)_([0-9]{0,})[_]{0,}([^\r\n\t\f\v]+)/);
-					if (parsed) {
-						recDB[fileNameParse.name]['startTime'] = new Date(parsed[1], parsed[2] - 1, parsed[3], parsed[4], parsed[5], parsed[6], parsed[7]).getTime();
-						recDB[fileNameParse.name]['UserId'] = parsed[8];
-						recDB[fileNameParse.name]['duration'] = Number(parsed[9]);
-						totalDuration += Number(parsed[9]);
-					}
-					recDB[fileNameParse.name]['size'] = fs.statSync(path.resolve(__dirname, config.folders.VoiceRecording, file)).size;
-					totalSize += recDB[fileNameParse.name]['size'];
-					//recDB[fileNameParse.name]['checked'] = true;
+			//db.serialize(() => {
+				db.run('UPDATE "recordings" SET `exists` = 0 WHERE 1', (res, err) => {
+					if (!err) { 
+						fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
+							let checkCount = 0;
+							let lastReportTime = 0;
+							let totalDuration = 0;
+							let totalSize = 0;
+							//Run FFMPEG check to find out duration
+							async.eachLimit(files, config.FileScanParallelLimit, (file, callback) => {
+								checkCount++;
+								let fileNameParse = path.parse(file);
+								//Parse the filename for date and userId
+								let parsed = fileNameParse.name.match(/([0-9]{4})\-([0-9]+)\-([0-9]+)_([0-9]+)\-([0-9]+)\-([0-9]+)_([0-9]+)[_]+([0-9]+)_([0-9]{0,})[_]{0,}([^\r\n\t\f\v]+)/);
+								if (parsed) {
+									totalDuration += Number(parsed[9]);
+									let thisSize = fs.statSync(path.resolve(__dirname, config.folders.VoiceRecording, file)).size;
+									totalSize += thisSize;
+									this.recordingUpdateAdd(file, new Date(parsed[1], parsed[2] - 1, parsed[3], parsed[4], parsed[5], parsed[6], parsed[7]).getTime(), parsed[8], Number(parsed[9]), thisSize)
+										.then(() => {
+											//Periodically report progress of the scan to the console
+											if (Date.now() - lastReportTime >= 1000 || checkCount == files.length) {
+												utils.report("ScanRecordings scan progress: " + checkCount + "/" + files.length + " (" + (Math.round(10000 * checkCount / files.length) / 100) + " %) done...", 'c');
+												lastReportTime = Date.now();
+											}
 
-					//Periodically report progress of the scan to the console
-					if (Date.now() - lastReportTime >= 1000 || checkCount == files.length) {
-						utils.report("ScanRecordings scan progress: " + checkCount + "/" + files.length + " (" + (Math.round(10000 * checkCount / files.length)/100) + " %) done...", 'c');
-						lastReportTime = Date.now();
-					}
+											callback();
+										});
+								}
 
-					callback();
-					//utils.checkAudioFormat(path.resolve(__dirname, config.folders.VoiceRecording, file))
-					//	.then(result => {
-					//		if (result['mode'] != 'none') {
-					//			if (result['metadata'].format) {
-					//				recDB[fileNameParse.name]['duration'] = result['metadata'].format.duration;
-					//				recDB[fileNameParse.name]['size'] = result['metadata'].format.size;
-					//				recDB[fileNameParse.name]['good'] = 1;
-					//			}
-					//			recDB[fileNameParse.name]['checked'] = true;
-					//		}
+								
+								//utils.checkAudioFormat(path.resolve(__dirname, config.folders.VoiceRecording, file))
+								//	.then(result => {
+								//		if (result['mode'] != 'none') {
+								//			if (result['metadata'].format) {
+								//				recDB[fileNameParse.name]['duration'] = result['metadata'].format.duration;
+								//				recDB[fileNameParse.name]['size'] = result['metadata'].format.size;
+								//				recDB[fileNameParse.name]['good'] = 1;
+								//			}
+								//			recDB[fileNameParse.name]['checked'] = true;
+								//		}
 
-					//		//Periodically report progress of the scan to the console
-					//		if (Date.now() - lastReportTime >= 1000) {
-					//			utils.report("ScanRecordings scan progress: " + checkCount + "/" + files.length + " (" + (Math.round(10000 * checkCount / files.length)/100) + " %) done...", 'c');
-					//			lastReportTime = Date.now();
-					//		}
+								//		//Periodically report progress of the scan to the console
+								//		if (Date.now() - lastReportTime >= 1000) {
+								//			utils.report("ScanRecordings scan progress: " + checkCount + "/" + files.length + " (" + (Math.round(10000 * checkCount / files.length)/100) + " %) done...", 'c');
+								//			lastReportTime = Date.now();
+								//		}
 
-					//		callback();
-					//	})
-					//	.catch(err => {
-					//		utils.report("Couldn't execute ffprobe on '" + file + "' file. Ignoring.", 'y');
-					//		//utils.report("Couldn't execute ffprobe on '" + file + "' file. Error: " + err, 'y');
-					//		if (!recDB[fileNameParse.name]) recDB[fileNameParse.name] = {};
-					//		recDB[fileNameParse.name]['extension'] = fileNameParse.ext;
-					//		recDB[fileNameParse.name]['good'] = 0;
-					//		recDB[fileNameParse.name]['checked'] = true;
-					//		callback();
-					//	});
-				}, () => {
-					utils.report("Found " + checkCount + " voice recordings (Duration " + Math.floor(totalDuration / 36000) / 100 + " hours, size " + Math.floor(100*totalSize/1048576)/100 + " Mb)! Updating the database...", 'g');
+								//		callback();
+								//	})
+								//	.catch(err => {
+								//		utils.report("Couldn't execute ffprobe on '" + file + "' file. Ignoring.", 'y');
+								//		//utils.report("Couldn't execute ffprobe on '" + file + "' file. Error: " + err, 'y');
+								//		if (!recDB[fileNameParse.name]) recDB[fileNameParse.name] = {};
+								//		recDB[fileNameParse.name]['extension'] = fileNameParse.ext;
+								//		recDB[fileNameParse.name]['good'] = 0;
+								//		recDB[fileNameParse.name]['checked'] = true;
+								//		callback();
+								//	});
+							}, () => {
+								utils.report("Found " + checkCount + " voice recordings (Duration " + Math.floor(totalDuration / 36000) / 100 + " hours, size " + Math.floor(100*totalSize/1048576)/100 + " Mb)! Updating the database...", 'g');
 					
-					//update the database file
-					if (updateDBFile('recordings.json', recDB))
-						return resolve();
-					else
-						return resolve(true);
+								return resolve();
+							});
+						});
+					}
 				});
-			});
+			//});
 		});
-	},
-
-	//Check if we have any extra file in the folder that are not in the DB or files listed in the DB are missing
-	RecordingsUpdateNeededCheck: function () {
-		return new Promise((resolve, reject) => {
-			let needToUpdate = false;
-			fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
-				let checkCount = 0;
-				for (key in files) {
-					checkCount++;
-					let fileNameParse = path.parse(files[key]);
-					if (!recDB[fileNameParse.name]) {
-						needToUpdate = true;
-						//utils.report("recDB does not have '" + fileNameParse.name + "' key, forcing DB update...", 'y');
-						//break;
-					}
-					else
-						recDB[fileNameParse.name]['checked'] = true;
-				}
-				//If we checked all the files
-				if (checkCount == files.length) {
-					for (var key in recDB) {
-						if (!recDB[key]['checked']) {
-							//utils.report("File '" + key + "' does not exist in the Recordings folder, forcing DB update...", 'y');
-							delete recDB[key];
-							utils.report("Deleting recDB record '" + key + "', file does not exists anymore.", 'y');
-							needToUpdate = true;
-							//break;
-						}
-					}
-				}
-				//Update database if needed
-				if (needToUpdate) {
-					utils.report("recDB database is out of sync, forcing update...", 'y');
-					this.scanRecordingsFolder()
-						.then(() => { return resolve(null); });
-				}
-				else
-					return resolve(null);
-			});
-		});
-	},
-
-	//Queue Recordings HDD DB update
-	RecordingsHDD_DBQueueUpdate: function () {
-		if (!RecUpdateInQueue) {
-			setTimeout(() => {
-				lastRecDBUpdate = Date.now();
-				updateDBFile('recordings.json', recDB);
-				RecUpdateInQueue = false;
-			}, ((Date.now() - lastRecDBUpdate >= config.RecDBUpdatePeriod * 1000) ? 0 : config.RecDBUpdatePeriod - (Date.now() - lastRecDBUpdate) + 100));
-		}
-	},
-
-	//Add a recording to recDB
-	addRecording: function (file, startTime, duration, userId, size) {
-		let fileNameParse = path.parse(file);
-		recDB[fileNameParse.name] = {};
-		recDB[fileNameParse.name]['extension'] = fileNameParse.ext;
-		recDB[fileNameParse.name]['startTime'] = startTime;
-		recDB[fileNameParse.name]['UserId'] = userId;
-		recDB[fileNameParse.name]['duration'] = duration;
-		recDB[fileNameParse.name]['size'] = size;
-		this.RecordingsHDD_DBQueueUpdate();
 	},
 
 	//Create a list of files based on time and user request
