@@ -24,6 +24,7 @@ const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
 
 //technical
 var timings = {};
+var ffmpegPlaybackCommands = [];
 
 ////Class to combine ffmpeg complex filters together
 //class complexFilterBuild {
@@ -108,7 +109,7 @@ module.exports = {
 			return "";
 	},
 
-//Convert time in seconds to human readabale format
+	//Convert time in seconds to human readabale format
 	humanTime: function(seconds) {
 		let numdays = Math.floor(seconds / 86400);
 		let numhours = Math.floor(seconds / 3600);
@@ -155,6 +156,16 @@ module.exports = {
 		}
 		else
 			return Number(str);
+	},
+
+	//Parse the recording's filename for date and userId
+	parseRecFilename: function (filename) {
+		let fileNameParse = path.parse(filename);
+		let parsed = fileNameParse.name.match(/([0-9]{4})\-([0-9]+)\-([0-9]+)_([0-9]+)\-([0-9]+)\-([0-9]+)_([0-9]+)[_]+([0-9]+)_([0-9]{0,})[_]{0,}([^\r\n\t\f\v]+)/);
+		if (parsed)
+			return { startTime: new Date(parsed[1], parsed[2] - 1, parsed[3], parsed[4], parsed[5], parsed[6], parsed[7]).getTime(), userId: parsed[8], duration: Number(parsed[9]) };
+		else
+			return false;
 	},
 
 	//Return additional flags from command string
@@ -268,6 +279,19 @@ module.exports = {
 
 	// FFMPEG 
 
+	deletePlaybackCommands: function () {
+		for (i in ffmpegPlaybackCommands) {
+			ffmpegPlaybackCommands[i].kill('SIGSTOP');
+			//If command is not stopped within 5 seconds, force to kill the process
+			setTimeout(() => {
+				if (ffmpegPlaybackCommands[i]) {
+					ffmpegPlaybackCommands[i].kill();
+					delete ffmpegPlaybackCommands[i];
+				}
+			}, 100);
+		}
+	},
+
 	checkAudioFormat: function (filepath) {
 		return new Promise((resolve, reject) => {
 			ffmpeg.ffprobe(filepath, (err, metadata) => {
@@ -358,7 +382,7 @@ module.exports = {
 				else if (effects[i][1] == 'iron')
 					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 				else if (effects[i][1] == 'horn')
-					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+					ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 4, "-f", "lavfi"]);
 
 				//Concat source and silence input
 				//filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
@@ -456,63 +480,6 @@ module.exports = {
 		return ffcom;
 	},
 
-	////Add all effects from the list to ffmpeg command
-	//addAudioEffects: function (ffmpegCommand, effects, inputsToAttach=null) {
-	//	//inputsToAttach structure
-	//	//{	mode: 'concat' or 'mix',
-	//	//	list: [ { file:'some/file/name.mp3', delay:3251 },
-	//	//			{ file:'some/file/name.mp3', delay:3251 },
-	//	//			{ file:'some/file/name.mp3', delay:3251 } ] }
-
-	//	let newCommand = ffmpegCommand;
-	//	let filterBuilder = new complexFilterBuild();
-	//	//First, add IR inputs and 'anullsrc' silence input for afir filter (can be only one)
-	//	for (i in effects) {
-	//		if (effects[i][0] == 'afir') {
-	//			if (effects[i][1] == 'echo')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'pot')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'telephone')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'tube')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'bath')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'can')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'iron')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
-	//			else if (effects[i][1] == 'horn')
-	//				newCommand = newCommand.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
-
-	//			//Concat source and silence input
-	//			filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
-	//			break;
-	//		}
-	//	}
-	//	//Add effects to complexFilterBuild Class
-	//	for (i in effects) {
-	//		if (effects[i][0] == 'pitch') {
-	//			let speed = (1 - effects[i][1] / 100);
-	//			if (speed < 0.5)
-	//				speed = 0.5;
-	//			//complexFilters.push('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
-	//			filterBuilder.addFilter('asetrate=48000*' + (1 + effects[i][1] / 100) + ',aresample=48000,atempo=' + speed);
-	//		}
-	//		else if (effects[i][0] == 'vibrato')
-	//			filterBuilder.addFilter('vibrato=' + effects[i][1] + ':' + (effects[i][2] / 100));
-	//		else if (effects[i][0] == 'chorus')
-	//			filterBuilder.addFilter('chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3');
-	//		else if (effects[i][0] == 'afir') {
-	//			filterBuilder.addFilter('afir');
-	//		}
-	//	}
-	//	if (filterBuilder.output.length > 0)
-	//		newCommand = newCommand.complexFilter(filterBuilder.output).outputOptions('-map', "["+filterBuilder.endresult+"]");
-	//	return newCommand;
-	//},
-
 	//Process stream
 	processStream: function (inputs, flags, mode = 'concat', opusBitrate=false) {
 		let self = this;
@@ -530,29 +497,16 @@ module.exports = {
 		else
 			command = command.format('s16le').audioChannels(2).audioFrequency(48000);
 
-
-		//temp
-		//let pathParse = path.parse(inputs[0].file); //tmp
-		//let stopThis = false;
-		//function checkMem(period, firsttick = true, memAtStart = 0, max=0) {
-		//	let memUsedNow = process.memoryUsage().rss;
-		//	let memStart = firsttick ? memUsedNow : memAtStart;
-		//	let MaxThisFar = max < memUsedNow - memStart ? memUsedNow - memStart : max;
-		//	console.log("Memory monitor: Now: " + Math.round(memUsedNow / 1024 / 1024 * 100) / 100 + " Mb (" + (memUsedNow - memStart >= 0 ? "+":"")+ Math.round((memUsedNow - memStart) / 1024 / 1024 * 100) / 100+" Mb), Max: " + Math.round(MaxThisFar / 1024 / 1024 * 100) / 100+" Mb")
-		//	if (!stopThis)
-		//		setTimeout(() => { checkMem(period, false, memStart, MaxThisFar); }, period);
-		//}
-		//checkMem(100);
-
 		command
 			.on('error', function (err) {
-				self.report("ffmpeg reported error: " + err, 'r');
-				if (ffstream)
-					ffstream.end();
+				self.report("ffmpeg reported " + err, 'r');
+				if (ffstream) {
+					ffstream.destroy();
+					//global.gc();
+				}
 				
-				//command.kill('SIGSTOP');
+				command.kill('SIGSTOP');
 				//command.kill();
-				delete command;
 			})
 			.on('end', function (stdout, stderr) {
 				//if (stream)
@@ -565,6 +519,7 @@ module.exports = {
 			//})
 			.on('start', function (commandLine) {
 				if (config.logging.ConsoleReport.FfmpegDebug) self.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+				ffmpegPlaybackCommands.push(command);
 			})
 			.pipe(ffstream);
 			//.audioCodec('libmp3lame')
@@ -653,6 +608,16 @@ module.exports = {
 		if (mode == 'reset' && timings[name])
 			delete timings[name];
 		return "Delay debugging '" + name + "': " + delay + " ms since last operation, (" + totalDelay+" ms total).";
+	},
+
+	//Debug memory usage statistics
+	memoryStatShow: function(period) {
+		function toMb(bytes) {
+			return Math.round(bytes / 1024 / 1024 * 100) / 100;
+		}
+		let memUsedNow = process.memoryUsage();
+		console.log("Memory monitor: RSS: " + toMb(memUsedNow.rss) + " Mb, heapTotal: " + toMb(memUsedNow.heapTotal) + " Mb, heapUsed: " + toMb(memUsedNow.heapUsed) + " Mb.")
+		setTimeout(() => { this.memoryStatShow(period); }, period);
 	},
 
 	

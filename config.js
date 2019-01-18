@@ -168,6 +168,9 @@ module.exports = {
 	//If gaps between recordings is less than this amount of ms they all will be considered a single 'phrase'
 	PhraseAllowedGapMsTime: 300,
 
+	//Dont add to playback recordings that are less or equal to this duration (milliseconds)
+	IgnoreRecordingDuration: 40,
+
 	// ======== PERFORMANCE ========
 
 	//How many parallel ffmpeg processes we can run while scanning for files
@@ -177,8 +180,10 @@ module.exports = {
 	//How many parallel file scans can run (for updating recordings database)
 	FileScanParallelLimit: 4,
 
-	//Recordings DB update period. DB won't be recorded on HDD more often than this amount of seconds
-	RecDBUpdatePeriod: 30,
+	//Limit amout of DB records per transaction when writing big lists of data to DB (0 is no limit)
+	//   If this amount is too small (<500), it will result in making DB transactions too often and slowing down the DB connection,
+	//   Making this too big (>50000) will cause programm to hang up due to too big JSON arrays
+	DBInsertsPerTransaction: 25000,
 
 	//Limit amount of FFMPEG ComplexFilters applied to this value (0 if unlimited)
 	ComplexFiltersAmountLimit: 5,
@@ -229,10 +234,6 @@ module.exports = {
 		VoiceRecording: 'rec',
 		//Folder for temporary files
 		Temp: 'temp',
-		//Folder for chached youtube files
-		Cache: 'cached',
-		//Folder with database files
-		Database: 'database',
 		//Folder where we store uploaded soundfiles for soundboard
 		Sounds: 'sounds',
 		//Folder for Impulse Response filters
@@ -277,5 +278,14 @@ module.exports = {
 			DelayDebug: false,
 			FfmpegDebug: false,
 		}
-	} 
+	},
+
+	// ======== DEBUGGING ========
+
+	debug: {
+
+		ShowMemoryUsed: false,
+		ShowMemoryUsedPeriodMs: 1000,
+
+	}
 }

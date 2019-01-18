@@ -21,6 +21,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const https = require('https');
 const client = new Discord.Client();
+//var heapdump = require('heapdump');
 
 //Load bot parts
 const config = require('./config.js');
@@ -310,7 +311,7 @@ function startRecording(connection) {
 										});
 										//Add to the database
 										let FileProps = fs.statSync(targetFile)
-										db.addRecording(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0);
+										db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0);
 									})
 									.output(targetFile)
 									.run();
@@ -647,10 +648,14 @@ function stopPlayback(connection, pauseTheFile = false) {
 	}
 	//End the playback
 	if (connection.dispatcher) {
-		if (connection.dispatcher.stream)
-			connection.dispatcher.stream.destroy();
+		if (connection.dispatcher.stream) {
+			connection.dispatcher.end();
+			//connection.dispatcher.stream.destroy();
+		}
 		//connection.dispatcher.end();
 	}
+	//Kill all ffmpeg Playback processes
+	utils.deletePlaybackCommands();
 }
 
 //Check if we need to launch next sound in the queue
@@ -668,6 +673,9 @@ function handleQueue(reason) {
 	if (PausingThePlayback)
 		PausingThePlayback = false;
 }
+
+if (config.debug.ShowMemoryUsed)
+	utils.memoryStatShow(config.debug.ShowMemoryUsedPeriodMs);
 
 // =============== CLIENT EVENTS ===============
 
@@ -768,20 +776,17 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 if (utils.checkFoldersExistance()) {
 	db.prepareDatabase()
 		.then(() => {
-			db.scanSoundsFolder();
-			client.login(config.token);
-
-			//Update Records DB
-			db.scanRecordingsFolder()
-				.then((err) => {
-					if (!err)
-						RecordsDBReady = true;
+			db.scanSoundsFolder()
+				.then(() => {
+					db.checkRecordingsScanNeeded()
+						.then(err => {
+							if (!err)
+								RecordsDBReady = true;
+							client.login(config.token);
+						});
 				});
 		})
 		.catch(err => { utils.report("There was an error while preparing the database: "+err, 'r'); });
-	//db.loadUsersDB();
-	//db.loadSoundsDB();
-	//db.loadRecDB();
 
 }
 
@@ -815,6 +820,18 @@ client.on('message', async message => {
 								}
 								break;
 							}
+						case 'shutdown':
+						case 'poweroff':
+						case 'logout':
+							{
+								if (checkPermission(guildMember, 30)) {
+									sendInfoMessage("Bot shuts down. See you! :wave:", message.channel, message.author);
+									setTimeout(() => {
+										handleExitEvent();
+									}, 1000);
+								}
+								break;
+							}
 						case 'help':
 							{
 								//Send in private chat
@@ -828,15 +845,17 @@ client.on('message', async message => {
 								if (config.EnableSoundboard && checkPermission(guildMember, 6, message.channel)) {
 									if (message.channel.type != "dm")
 										sendInfoMessage("List sent in private!", message.channel);
-									let found = db.getSoundsList();
-									let resultList = "";
-									for (i in found) {
-										resultList += config.CommandCharacter + found[i] + "\n";
-									}
-									resultList = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ```" + resultList + "```";
-									message.author.send(resultList)
-										.then(message => utils.report("Sent list of possible commands to '" + userName + "' user (" + message.author.id + ").", 'y'))
-										.catch(error => utils.report("Error sending message to '" + userName + "' user (" + message.author.id + "). Reason: " + error, 'r'));
+									db.getSoundsList()
+										.then(found => {
+											let resultList = "";
+											for (i in found) {
+												resultList += config.CommandCharacter + found[i] + "\n";
+											}
+											resultList = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ```" + resultList + "```";
+											message.author.send(resultList)
+												.then(message => utils.report("Sent list of possible commands to '" + userName + "' user (" + message.author.id + ").", 'y'))
+												.catch(error => utils.report("Error sending message to '" + userName + "' user (" + message.author.id + "). Reason: " + error, 'r'));
+										});
 								}
 								break;
 							}
@@ -1019,6 +1038,13 @@ client.on('message', async message => {
 										}
 									}
 									PlayingQueue = [];
+
+									////Heap dumb
+									//setTimeout(() => {
+									//	heapdump.writeSnapshot('/root/JS_DRaSB_' + Date.now() + '.heapsnapshot', (err, file) => {
+									//		utils.report("Written dumb file to " + file + "!" , 'y');
+									//	});
+									//}, 2000);
 								}
 								break;
 							}
@@ -1038,8 +1064,7 @@ client.on('message', async message => {
                                     let sequenceMode = true;
                                     //If there is no date, use 'ago' time, else use random
 									let reqDate = additionalFlags['date'] ? additionalFlags['date'].getTime() : (additionalFlags['start'] ? Date.now() - additionalFlags['start'] * 1000 : additionalFlags['timetag'] ? Date.now() - additionalFlags['timetag'] * 1000 : db.getRecDates(users).random);
-									console.log(additionalFlags);
-									console.log(new Date(reqDate).toISOString());
+									
                                     //If there is no exact date, no start mark and no timetag, or command is quote => make it 'phrase'
 									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['start'] || command == 'quote')
 										sequenceMode = false;
@@ -1054,7 +1079,7 @@ client.on('message', async message => {
 										{ how: 'phrase', minDuration: duration, allowedGap: config.PhraseAllowedGapMsTime, gapToAdd: config.GapsBetweenSayingsMs };
 									
 									let found = db.makeRecFileList(reqDate, mode, config.SearchHoursPeriod * 3600000, users);
-									console.log(found);
+									
 									if (found) {
 										prepareForPlaybackOnChannel(guildMember)
 											.then((connection) => {
@@ -1387,4 +1412,18 @@ client.on('message', async message => {
 process.on('uncaughtException', function (exception) {
 	utils.report("uncaughtException: " + exception, 'r');
 });
+
+//Handle cleanup before program exits
+process.stdin.resume();
+function handleExitEvent() {
+	utils.report("Recieved requested to stop the application, cleaning up...", 'y');
+	client.destroy();
+	db.shutdown();
+	process.exit();
+};
+
+process.on('SIGINT', handleExitEvent); //ctrl+c event
+process.on('SIGUSR1', handleExitEvent); //kill pid
+process.on('SIGUSR2', handleExitEvent); //kill pid
+
 
