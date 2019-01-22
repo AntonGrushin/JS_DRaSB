@@ -150,12 +150,22 @@ module.exports = {
 
 	// ======== RECORDINGS PLAYBACK ========
 
+	//Default timezone. When user types a date of a recording without specifying the time zone, this  one will be used. If its same as Locale TZ you can leave it blank
+	// List of possible values can be seen here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones example: "Europe/Moscow"
+	DefaultRequestTimezone: "Europe/Amsterdam",
+
+	//Recordings timezone. LEAVE IT BLANK unless you moved your server with captured records to some other server with different timezone
+	//  and your records have old timestamp. If that is so, then this should be timezone of your old server
+	DatabaseTimezone: "",
+
 	//Search in this period of time (hours) for records. If nothing was found, stop the search and return fail.
-	SearchHoursPeriod: 0,
+	SearchHoursPeriod: 40,
 
 	//What should be maximum allowed duration of playing recordings (in seconds). 0 for no limitation
-	// BETA: Current algorithm is very hungry on memory, building 60 seconds of recorded data takes 700-800 Mb of ram
-	MaximumDurationToPlayback: 60,
+	MaximumDurationToPlayback: 300,
+
+	//Default duration to playback if no duration specified
+	DefaultRecPlaybackDuration: 300,
 
 	//If gap between recorded audios is more than this amount of seconds stop the playback since conversation was probably over. Set to 0 for no limitation.
 	GapDurationToStopPlayback: 10 * 60,
@@ -170,6 +180,10 @@ module.exports = {
 
 	//Dont add to playback recordings that are less or equal to this duration (milliseconds)
 	IgnoreRecordingDuration: 40,
+
+	//Check for 'Recordings' database integrity on startup.
+	//  Bot will check that database records were not moved/added. If they were, it will rescan the folder and update the database.
+	CheckRecFolderOnStartup: true,
 
 	// ======== PERFORMANCE ========
 
@@ -223,6 +237,7 @@ module.exports = {
 			PauseResumeSkipPlayback: true,
 			RejoinChannel: true,
 			StopPlaybackClearQueue: true,
+			SetVolumeAbove100: false,
         },
     },
 

@@ -185,6 +185,7 @@ function checkPermission(guildmember, bit=31, channel=null) {
 	//RejoinChannel				8
 	//StopPlaybackClearQueue	9
 	//RenameLocalAudioFiles		10
+	//SetVolumeAbove100			11
 
 	//If he is admin
 	if (config.permissions.AdminsList.indexOf(guildmember.user.id) > -1)
@@ -206,6 +207,7 @@ function checkPermission(guildmember, bit=31, channel=null) {
 		permission += config.permissions.User.RejoinChannel << 8;
 		permission += config.permissions.User.StopPlaybackClearQueue << 9;
 		permission += config.permissions.User.RenameLocalAudioFiles << 10;
+		permission += config.permissions.User.SetVolumeAbove100 << 11;
 	}
 	let result = (permission & (1 << bit)) > 0;
 	if (!result)
@@ -561,10 +563,10 @@ function playQueue(connection) {
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
 					db.userPlayedRecsInc(inputObject.user.id); //Increment value in DB for statistics
-					let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, inputObject.searchresult.method);
-					connection.playConvertedStream(ffstream, PlaybackOptions);
+					let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
+					connection.playConvertedStream(ffstream, PlaybackOptions); 
 
-					playbackMessage(":record_button: Playing recording from `" + new Date(CurrentPlayingSound.searchresult.startTime).toString() + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration/1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+					playbackMessage(":record_button: Playing recording of `" + utils.getDateFormatted(CurrentPlayingSound.searchresult.startTime, "D MMM YYYY, HH:mm") + " - " + utils.getDateFormatted(CurrentPlayingSound.searchresult.endTime, "HH:mm z") + "` period" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration/1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
 					//Attach event listeners
 					attachEventsOnPlayback(connection);
 
@@ -1003,7 +1005,7 @@ client.on('message', async message => {
 							{
 								if (config.EnableSoundboard) {
 									let volumeToSet = 20;
-									if (!isNaN(args[0]) && args[0] > 0 && args[0] <= 100)
+									if (!isNaN(args[0]) && args[0] > 0 && (args[0] <= 100 || checkPermission(guildMember, 11, message.channel)))
 										volumeToSet = args[0];
 									//If sound is playing, change its volume
 									if (soundIsPlaying) {
@@ -1059,10 +1061,10 @@ client.on('message', async message => {
                                     if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand", 'start') + " Recieved command!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
                                     //Get list of users that were mentioned
                                     let users = message.content.match(/([0-9]{9,})/gm);
-                                    if (!users) users = [];
+									if (!users) users = [];
 									
                                     let sequenceMode = true;
-                                    //If there is no date, use 'ago' time, else use random
+									//If there is no date, use 'ago' time, else use random
 									let reqDate = additionalFlags['date'] ? additionalFlags['date'].getTime() : (additionalFlags['start'] ? Date.now() - additionalFlags['start'] * 1000 : additionalFlags['timetag'] ? Date.now() - additionalFlags['timetag'] * 1000 : db.getRecDates(users).random);
 									
                                     //If there is no exact date, no start mark and no timetag, or command is quote => make it 'phrase'
@@ -1071,7 +1073,7 @@ client.on('message', async message => {
 									
 									//If specified duration is withing the limit, use it, otherwise use default value from config
 									let duration = sequenceMode ?
-										additionalFlags['duration'] > 0 && additionalFlags['duration'] < config.MaximumDurationToPlayback ? additionalFlags['duration'] * 1000 : config.MaximumDurationToPlayback * 1000 :
+										additionalFlags['duration'] > 0 && (additionalFlags['duration'] < config.MaximumDurationToPlayback || config.MaximumDurationToPlayback==0) ? additionalFlags['duration'] * 1000 : config.DefaultRecPlaybackDuration * 1000 :
 										additionalFlags['duration'] > 0 ? additionalFlags['duration']*1000 : config.PhraseMsDuration;
 									
 									let mode = sequenceMode ?

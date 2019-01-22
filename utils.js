@@ -21,31 +21,11 @@ const path = require('path');
 const mkdirp = require('mkdirp');
 const ffmpeg = require('fluent-ffmpeg');
 const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
+const moment = require("moment-timezone");
 
 //technical
 var timings = {};
 var ffmpegPlaybackCommands = [];
-
-////Class to combine ffmpeg complex filters together
-//class complexFilterBuild {
-//	constructor() {
-//		this.iteration = 0;
-//		this.output = [];
-//		this.endresult = "";
-//	}
-
-//	addFilter(filter, input = null) {
-//		let inputSource = "";
-//		if (!input && this.iteration == 0)
-//			inputSource = "[0:a]";
-//		else if (input)
-//			inputSource = input;
-//		else
-//			inputSource = "[s" + this.iteration + "]";
-//		this.output.push(inputSource + filter + "[s" + (++this.iteration) + "]");
-//		this.endresult = "s" + this.iteration;
-//	}
-//}
 
 module.exports = {
 
@@ -158,6 +138,43 @@ module.exports = {
 			return Number(str);
 	},
 
+	//Convert timezones of milliseconds timestamp
+	convTimezone: function (time, tzTo = config.DefaultRequestTimezone, tzFrom = config.DatabaseTimezone) {
+		let thisTime = moment(time);
+		if (tzFrom != "")
+			thisTime = moment.tz(datetimeMs, tzFrom);
+		else
+			thisTime = moment.tz(datetimeMs, moment.tz.guess());
+
+		//convert to target TZ
+		if (tzTo != "")
+			thisTime = thisTime.clone().tz(tzTo);
+		else
+			thisTime = thisTime.clone().tz(moment.tz.guess());
+		return thisTime.valueOf();
+	},
+
+	//Return human date-time with target time zone
+	getDateFormatted: function (datetimeMs, format="", tzTo = config.DefaultRequestTimezone, tzFrom = config.DatabaseTimezone) {
+		let thisTime = moment(datetimeMs);
+		//convert from source timezone
+		if (tzFrom != "")
+			thisTime = moment.tz(datetimeMs, tzFrom);
+		else
+			thisTime = moment.tz(datetimeMs, moment.tz.guess());
+			
+		//convert to target TZ
+		if (tzTo != "")
+			thisTime = thisTime.clone().tz(tzTo);
+		else
+			thisTime = thisTime.clone().tz(moment.tz.guess());
+
+		if (format)
+			return thisTime.format(format);
+		else
+			return thisTime.format("D MMM YYYY, HH:mm z");
+	},
+
 	//Parse the recording's filename for date and userId
 	parseRecFilename: function (filename) {
 		let fileNameParse = path.parse(filename);
@@ -195,7 +212,7 @@ module.exports = {
 			output['start'] = this.toSeconds(startResult[1]);
 		//Start time (exact date)
 		let dateResult = inString.match(/[ ]+(?:s|start|date|when)[ =]{0,}['"\()]{1,}([0-9a-zA-Z :\-\/\\]+)['"\)]{1,}/);
-		if (dateResult)
+		if (dateResult) 
 			output['date'] = new Date(Date.parse(dateResult[1]));
         //End time
         let endResult = inString.match(/[ ]+(?:end|e)[ ]{0,}([0-9.:mhs]+)/);
@@ -206,7 +223,7 @@ module.exports = {
 		if (durResult)
 			output['duration'] = this.toSeconds(durResult[1]);
 		//Timetag
-		let ttagResult = inString.match(/[ ]+([0-9.:mhs]+)/);
+		let ttagResult = inString.match(/[ ]+([0-9.:mhsd]+)/);
 		if (ttagResult)
 			output['timetag'] = this.toSeconds(ttagResult[1]);
 		
@@ -281,11 +298,13 @@ module.exports = {
 
 	deletePlaybackCommands: function () {
 		for (i in ffmpegPlaybackCommands) {
-			ffmpegPlaybackCommands[i].kill('SIGSTOP');
+			if (process.platform === "linux")
+				ffmpegPlaybackCommands[i].kill('SIGSTOP');
 			//If command is not stopped within 5 seconds, force to kill the process
 			setTimeout(() => {
 				if (ffmpegPlaybackCommands[i]) {
-					ffmpegPlaybackCommands[i].kill();
+					if (process.platform === "linux")
+						ffmpegPlaybackCommands[i].kill();
 					delete ffmpegPlaybackCommands[i];
 				}
 			}, 100);
@@ -349,14 +368,17 @@ module.exports = {
 	//		CONCAT (add up audios one after another)
 	//			ffmpeg -imp0 -inmRL -inpSilence -inp1 -inp2 -inpN -filter [concatInputs + concatIR][afir][other]
 	//		MIX (delay audios and mix them up)
-	//			ffmpeg -imp0 -inpRL -inpSilence -inp1 -inp2 -inpN -filter [delay1][delay2][delayN][amix][concatIR][afir][other]
-	buildFfmpegCommand: function (inputs, effects, mode='concat', effectCountLimit=0) {
+	//																	 [delay1][delay3][concatInputs1]
+	//	 ffmpeg -imp0 - inpRL - inpSilence - inp1 - inp2 - inpN - filter [delay2][delay4][concatInputs2][amix][concatIR][afir][usual][usual]
+	//																	 [delay5][delay6][concatInputs3]
+	buildFfmpegCommand: function (inputs, effects, mode = { how: 'concat', channels: 1 }, effectCountLimit=0) {
 		//'inputs' structure
-		//[ { file:'some/file/name.mp3', delay:3251 },
-		//	{ file:'some/file/name.mp3', delay:3251 },
-		//	{ file:'some/file/name.mp3', delay:3251 } ] 
+		//[ { file:'some/file/name.mp3', delay:3251, channel:1 },
+		//	{ file:'some/file/name.mp3', delay:3251, channel:1 },
+		//	{ file:'some/file/name.mp3', delay:3251, channel:1 } ]
 		let inputsToMix = [];
 		let inputsToConcat = [];
+		let channels = [];
 		let filters = [];
 		let afirPresented = false;
 		let nextInput = '0:0';
@@ -397,7 +419,7 @@ module.exports = {
 		}
 
 		//Concat filters
-		if (mode == 'concat') {
+		if (mode.how == 'concat') {
 			inputsToConcat.push('0:0');
 			for (i in inputs) {
 				//If we added 'afir' filters, we have 2 additional inputs after 0:0, so add 3 to index number, otherwise add 1 (because first input is no longer in this array)
@@ -416,31 +438,38 @@ module.exports = {
 		}
 		//Delay and mix filters
 		else {
-			inputsToMix.push('0:0');
-			//'adelay' filter
+			//Fill up channels
+			for (let i = 0; i < mode.channels; i++) {
+				channels.push({ lastOutput: null, inputsToConcat:[] });
+			}
+			channels[0].inputsToConcat = ['0:0']; //add first input here
+
+			//Add delay
 			for (i in inputs) {
 				let currIndex = afirPresented ? Number(i) + 3 : Number(i) + 1;
 				let delay = inputs[i]['delay'] ? inputs[i]['delay'] : 0;
 				filters.push({
 					filter: 'adelay', options: delay + '|' + delay,
-					inputs: currIndex + ':0', outputs: 'dv' + currIndex
+					inputs: currIndex + ':0', outputs: 'd' + currIndex
 				});
+				channels[inputs[i]['channel']].inputsToConcat.push('d' + currIndex);
+				//channels[inputs[i]['channel']].lastOutput = 'd' + currIndex;
+			}
+			//Add concat
+			for (chan in channels) {
 				filters.push({
-					filter: 'volume', options: inputs.length - Number(i),
-					inputs: 'dv' + currIndex, outputs: 'd' + currIndex
+					filter: 'concat', options: { v: 0, a: 1, n: channels[chan].inputsToConcat.length },
+					inputs: channels[chan].inputsToConcat, outputs: 'ch' + chan
 				});
-				inputsToMix.push('d' + currIndex);
+				inputsToMix.push('ch' + chan);
+				nextInput = 'ch' + chan;
 			}
 			//'amix' filter
-			if (inputsToMix.length > 1) {
+			if (channels.length > 1) {
 				filters.push({
 					filter: 'amix', options: { inputs: inputsToMix.length, duration: 'longest', dropout_transition: 0 },
 					inputs: inputsToMix, outputs: 'mixOut'
 				});
-				//filters.push({
-				//	filter: 'volume', options: inputsToMix.length,
-				//	inputs: 'mixOutNv', outputs: 'mixOut'
-				//});
 				nextInput = 'mixOut';
 			}
 			//add concat here if we have afir filters
@@ -481,7 +510,7 @@ module.exports = {
 	},
 
 	//Process stream
-	processStream: function (inputs, flags, mode = 'concat', opusBitrate=false) {
+	processStream: function (inputs, flags, mode = { how: 'concat' }, opusBitrate=false) {
 		let self = this;
 		let effects = {};
 		if ('effects' in flags)
@@ -505,7 +534,8 @@ module.exports = {
 					//global.gc();
 				}
 				
-				command.kill('SIGSTOP');
+				if (process.platform === "linux")
+					command.kill('SIGSTOP'); //This does not work on Windows
 				//command.kill();
 			})
 			.on('end', function (stdout, stderr) {
@@ -524,7 +554,7 @@ module.exports = {
 			.pipe(ffstream);
 			//.audioCodec('libmp3lame')
 			//.audioBitrate('320k')
-			//.output(path.resolve(__dirname, config.folders.Temp, flags.duration + "s_" + pathParse.name + '.mp3'))
+			//.output(path.resolve(__dirname, config.folders.Temp, flags.duration + "s_" + path.parse(inputs[0].file).name + '.mp3'))
 			//.run();
 		
 		return ffstream;

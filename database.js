@@ -135,7 +135,7 @@ module.exports = {
 		`uploadedSounds`	INTEGER DEFAULT 0,      */
 	
 	//Update or add a single user
-	userUpdateAddPrepare: function () { userUpdateAddSqlStmt = db.prepare('INSERT INTO "users" (userid, "name", guildname, volume) VALUES ($userid, $name, $guildname, $volume) ON CONFLICT(userid) DO UPDATE SET "name"= $name, guildname=$guildname'); },
+	userUpdateAddPrepare: function () { userUpdateAddSqlStmt = db.prepare('INSERT INTO `users` (userid, `name`, guildname, volume) VALUES ($userid, $name, $guildname, $volume) ON CONFLICT(userid) DO UPDATE SET "name"= $name, guildname=$guildname'); },
 	userUpdateAdd: function (userid, name, guildname, volume) {
 		try {
 			userUpdateAddSqlStmt.run({ userid: userid, name: name, guildname: guildname ? guildname : name, volume: volume });
@@ -153,6 +153,7 @@ module.exports = {
 				});
 			});
 			updateUsersDBTransaction();
+			this.fillUsersDB();
 			utils.report("Updated " + count + " records in 'users' database.", 'g');
 		} catch (err) { handleError(err); }
 	},
@@ -162,15 +163,20 @@ module.exports = {
 		//usersVolume = {};
 		let rows = db.prepare('SELECT `volume`, userid from `users`').all();
 		for (i in rows) {
-			usersVolume[rows.userid] = volume;
+			usersVolume[rows[i].userid] = rows[i].volume;
 		}
 	},
 
-	setUserVolume: function (userid, value) { try { db.prepare('UPDATE "users" SET volume = $volume, lastCommand=$date WHERE userid = $userid').run({ userid: userid, volume: value, date: Date.now() }); } catch (err) { handleError(err); } },
-	userPlayedSoundsInc: function (userid) { try { db.prepare('UPDATE "users" SET playedSounds = playedSounds+1, lastCommand=$date WHERE userid = $userid').run({ userid: userid, date: Date.now() }); } catch (err) { handleError(err); } },
-	userPlayedYoutubeInc: function (userid) { try { db.prepare('UPDATE "users" SET playedYoutube = playedYoutube+1, lastCommand=$date WHERE userid = $userid').run({ userid: userid, date: Date.now() }); } catch (err) { handleError(err); } },
-	userPlayedRecsInc: function (userid) { try { db.prepare('UPDATE "users" SET playedRecordings = playedRecordings+1, lastCommand=$date WHERE userid = $userid').run({ userid: userid, date: Date.now() }); } catch (err) { handleError(err); } },
-	userUploadedSoundsInc: function (userid) { try { db.prepare('UPDATE "users" SET uploadedSounds = uploadedSounds+1 WHERE userid = $userid').run({ userid: userid }); } catch (err) { handleError(err); } },
+	setUserVolume: function (userid, value) {
+		try {
+			usersVolume[userid] = value;
+			db.prepare('UPDATE `users` SET volume = $volume, lastCommand=$date WHERE userid = $userid').run({ userid: userid, volume: value, date: Date.now() });
+		} catch (err) { handleError(err); }
+	},
+	userPlayedSoundsInc: function (userid) { try { db.prepare('UPDATE `users` SET playedSounds = playedSounds+1, lastCommand=$date WHERE userid = $userid').run({ userid: userid, date: Date.now() }); } catch (err) { handleError(err); } },
+	userPlayedYoutubeInc: function (userid) { try { db.prepare('UPDATE `users` SET playedYoutube = playedYoutube+1, lastCommand=$date WHERE userid = $userid').run({ userid: userid, date: Date.now() }); } catch (err) { handleError(err); } },
+	userPlayedRecsInc: function (userid) { try { db.prepare('UPDATE `users` SET playedRecordings = playedRecordings+1, lastCommand=$date WHERE userid = $userid').run({ userid: userid, date: Date.now() }); } catch (err) { handleError(err); } },
+	userUploadedSoundsInc: function (userid) { try { db.prepare('UPDATE `users` SET uploadedSounds = uploadedSounds+1 WHERE userid = $userid').run({ userid: userid }); } catch (err) { handleError(err); } },
 
 	//getUserVolume: function (userid) { let row; try { row = db.prepare("SELECT `volume` from `users` WHERE userid = ?").get(userid); } catch (err) { handleError(err); } if (row) return row.volume; else return config.DefaultVolume; },
 	getUserVolume: function (userid) { if (usersVolume[userid]) return usersVolume[userid]; else return config.DefaultVolume; },
@@ -194,7 +200,7 @@ module.exports = {
 		`exists`	INTEGER DEFAULT 1,           */
 
 	//Update or add a single sound record
-	soundUpdateAddPrepare: function () { soundUpdateAddSqlStmt = db.prepare('INSERT INTO "sounds" (filenameFull, filename, extension, duration, size, bitrate, uploadedBy, uploadDate) VALUES ($filenameFull, $filename, $extension, $duration, $size, $bitrate, $uploadedBy, $uploadDate) ON CONFLICT(filenameFull) DO UPDATE SET filename=$filename, extension=$extension, duration=$duration, size=$size, `exists`=1'); },
+	soundUpdateAddPrepare: function () { soundUpdateAddSqlStmt = db.prepare('INSERT INTO `sounds` (filenameFull, filename, extension, duration, size, bitrate, uploadedBy, uploadDate) VALUES ($filenameFull, $filename, $extension, $duration, $size, $bitrate, $uploadedBy, $uploadDate) ON CONFLICT(filenameFull) DO UPDATE SET filename=$filename, extension=$extension, duration=$duration, size=$size, `exists`=1'); },
 	soundUpdateAdd: function (filenameFull, duration, size, bitrate, uploadedBy = 0) {
 		try {
 			let fileNameParse = path.parse(filenameFull);
@@ -206,7 +212,7 @@ module.exports = {
 	scanSoundsFolder: function () {
 		return new Promise((resolve, reject) => {
 			try {
-				db.prepare('UPDATE "sounds" SET `exists` = 0 WHERE 1').run();
+				db.prepare('UPDATE `sounds` SET `exists` = 0 WHERE 1').run();
 				let scanSoundsFolderDBTransaction = db.transaction((inputs) => {
 					while (element = inputs.shift())
 						this.soundUpdateAdd(element.filenameFull, element.duration, element.size, element.bitrate);
@@ -399,49 +405,51 @@ module.exports = {
 	//Check if we need to scan recordings folder and launch it if needed
 	checkRecordingsScanNeeded: function () {
 		return new Promise((resolve, reject) => {
-			utils.report("Checking for 'Recordings' database integrity (this may take a while)...", 'w');
-			let result = db.prepare("SELECT count(*) AS 'count', MIN(startTime) AS 'first', MAX(startTime) AS 'last', SUM(duration) AS 'dur' from `recordings` WHERE `exists`=1").get();
-			let dbRecordsCount = result ? result.count : 0;
-			let totalDurationFromDB = result ? result.dur : 0;
-			let DBStartTime = result ? result.first : 0;
-			let DBLastTime = result ? result.last : 0;
+			if(config.CheckRecFolderOnStartup) {
+				utils.report("Checking for 'Recordings' database integrity (this may take a while)...", 'w');
+				let result = db.prepare("SELECT count(*) AS 'count', MIN(startTime) AS 'first', MAX(startTime) AS 'last', SUM(duration) AS 'dur' from `recordings` WHERE `exists`=1").get();
+				let dbRecordsCount = result ? result.count : 0;
+				let totalDurationFromDB = result ? result.dur : 0;
+				let DBStartTime = result ? result.first : 0;
+				let DBLastTime = result ? result.last : 0;
 
-			//Get starting and ending time from the DB
-			StartEnd = this.getRecDates();
+				//Get starting and ending time from the DB
+				StartEnd = this.getRecDates();
 
-			//Get files in the folder
-			let totalDurationFiles = 0;
-			fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
-				if (dbRecordsCount == files.length) {
-					//Sum up all durations
-					for (i in files) {
-						let parsed = utils.parseRecFilename(files[i]);
-						if (parsed)
-							totalDurationFiles += parsed.duration;
+				//Get files in the folder
+				let totalDurationFiles = 0;
+				fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
+					if (dbRecordsCount == files.length) {
+						//Sum up all durations
+						for (i in files) {
+							let parsed = utils.parseRecFilename(files[i]);
+							if (parsed)
+								totalDurationFiles += parsed.duration;
+						}
 					}
-				}
-				let firstFileParse = utils.parseRecFilename(files[0]);
-				let firstFileTime = firstFileParse ? firstFileParse.startTime : 0;
-				let lastFileParse = utils.parseRecFilename(files[files.length - 1]);
-				let lastFileTime = lastFileParse ? lastFileParse.startTime : 0;
+					let firstFileParse = utils.parseRecFilename(files[0]);
+					let firstFileTime = firstFileParse ? firstFileParse.startTime : 0;
+					let lastFileParse = utils.parseRecFilename(files[files.length - 1]);
+					let lastFileTime = lastFileParse ? lastFileParse.startTime : 0;
 
 
-				if (dbRecordsCount == files.length &&
-					firstFileTime == DBStartTime &&
-					lastFileTime == DBLastTime &&
-					totalDurationFiles == totalDurationFromDB) {
+					if (dbRecordsCount == files.length &&
+						firstFileTime == DBStartTime &&
+						lastFileTime == DBLastTime &&
+						totalDurationFiles == totalDurationFromDB) {
 
-					//Looks like everything is fine, no need to rescan the folder
-					return resolve();
-				}
-				else {
-					//Rescan is needed!
-					utils.report("Found mismatch on database records and files in the '" + config.folders.VoiceRecording + "' folder! Rescanning...", 'y');
-					this.scanRecordingsFolder()
-						.then(() => { return resolve(); });
-				}
-			});
-
+						//Looks like everything is fine, no need to rescan the folder
+						return resolve();
+					}
+					else {
+						//Rescan is needed!
+						utils.report("Found mismatch on database records and files in the '" + config.folders.VoiceRecording + "' folder! Rescanning...", 'y');
+						this.scanRecordingsFolder()
+							.then(() => { return resolve(); });
+					}
+				});
+			}
+			else return resolve();
 		});
 	},
 
@@ -457,16 +465,21 @@ module.exports = {
         let statGapsAdded = 0;
 		let statGapsRemoved = 0;
 		let statFilesCount = 0;
+		let thisgap = 0;
 		let output = {};
 		let result = [];
 		let lastElement = {};
+		let channelsToMix = [];
 		let additionalCondition = "";
-		let endTimeCut = mode.how == "sequence" ? dateMs + mode.duration * 2 : dateMs + timeLimitMs;
+		//let endTimeCut = mode.how == "sequence" ? dateMs + config.SearchHoursPeriod * 3600000 : dateMs + timeLimitMs;
+		let endTimeCut = dateMs + config.SearchHoursPeriod * 3600000;
+		
 		function setOutputParams() {
 			output['list'] = result;
 			output['duration'] = currentResultDuration;
 			output['startTime'] = StartTime;
 			output['endTime'] = FurthestEndingTime;
+			output['channelsToMix'] = channelsToMix.length;
 			output['totalAudioDuration'] = totalAudioDuration;
 			output['method'] = peneterated ? 'mix' : 'concat';
 			output['GapsRemoved'] = statGapsRemoved;
@@ -492,6 +505,7 @@ module.exports = {
 				//If its first iteration
 				if (result.length == 0) {
 					StartTime = rec.startTime;
+					channelsToMix.push({ lastTime: rec.startTime + rec.duration, lastOffset:0 });
 				}
 				else {
 					if (FurthestEndingTime < lastElement['startTime'] + lastElement['duration'])
@@ -501,31 +515,52 @@ module.exports = {
 				//mode: { how: 'sequence', duration:300000, gapToStop:30000, gapToAdd:100 } - list files sequentially untill duration is reached or gap between files is longer than gapToStop
 				if (mode.how == 'sequence') {
 					//If we reached duration or gap limit, return result
-					if (currentResultDuration >= mode.duration || (mode.gapToStop > 0 && rec['startTime'] - (lastElement['startTime'] ? (lastElement['startTime'] + lastElement['duration']) : rec['startTime']) > mode.gapToStop)) {
+					if (currentResultDuration >= mode.duration && currentResultDuration || (mode.gapToStop > 0 && rec['startTime'] - (lastElement['startTime'] ? (lastElement['startTime'] + lastElement['duration']) : rec['startTime']) > mode.gapToStop)) {
 						setOutputParams();
 						return output;
 					}
 					else {
+						let addToThisChannel = 0;
 						//Check if audio is peneterating with anything else
 						if (FurthestEndingTime > rec['startTime']) {
 							peneterated = true;
 							//console.log("Peneteration: " + (FurthestEndingTime - rec['startTime']) + 'ms on "'+i+'"');
+							
+							//Check which channel is free and add file there or make a new channel
+							let needToAddNewChannel = true;
+							for (i in channelsToMix) {
+								if (channelsToMix[i].lastTime <= rec['startTime']) {
+									needToAddNewChannel = false;
+									addToThisChannel = i;
+									break;
+								}
+							}
+							if (needToAddNewChannel) {
+								channelsToMix.push({ lastTime: StartTime, lastOffset: 0 });
+								addToThisChannel = channelsToMix.length - 1;
+							}
 						}
 						//Remove or add the gap
 						else {
 							let gap = FurthestEndingTime ? rec['startTime'] - FurthestEndingTime : 0;
 							if (mode.gapToAdd > 0 && FurthestEndingTime) {
 								currentOffset += mode.gapToAdd - gap;
+								thisgap = mode.gapToAdd - gap;
 								if (mode.gapToAdd - gap >= 0) statGapsAdded += mode.gapToAdd - gap;
 								else statGapsRemoved += gap - mode.gapToAdd;
 							}
 							else {
 								currentOffset -= gap;
+								thisgap = gap;
 								statGapsRemoved += gap;
 							}
 						}
 						//Add the result
-						result.push({ file: path.resolve(__dirname, config.folders.VoiceRecording, rec['filename']), delay: (rec['startTime'] - StartTime + currentOffset) });
+						//rec['startTime'] + currentOffset - channelsToMix[addToThisChannel].lastTime
+						let delay = (rec['startTime'] + currentOffset - (channelsToMix[addToThisChannel].lastTime + channelsToMix[addToThisChannel].lastOffset))
+						result.push({ file: path.resolve(__dirname, config.folders.VoiceRecording, rec['filename']), delay: delay, channel: addToThisChannel });
+						channelsToMix[addToThisChannel].lastTime = rec['startTime'] + rec['duration'];
+						channelsToMix[addToThisChannel].lastOffset = currentOffset;
 						statFilesCount++;
 
 						currentResultDuration = rec['startTime'] + rec['duration'] + currentOffset - StartTime;
