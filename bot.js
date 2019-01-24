@@ -136,6 +136,41 @@ function playbackMessage(message) {
 	}
 }
 
+//Send message or several if it exceeds Character limit
+function breakMessage(message, usedCount = 0, beginMessage="", endMessage="", backwards=false) {
+	let result = [];
+	if (message.length > config.MessageCharacterLimit - usedCount) {
+		let cutted = message.split('\n');
+		let thisChunk = "";
+		//If its backwards we cut message from the end
+		if (backwards) {
+			for (i in cutted) {
+				if (thisChunk.length + cutted[cutted.length - i - 1].length <= config.MessageCharacterLimit - (beginMessage.length + endMessage.length + 2 + usedCount))
+					//thisChunk += cutted[i] + "\n";
+					thisChunk = cutted[cutted.length - i - 1] + "\n" + thisChunk;
+				else {
+					result.push(beginMessage + thisChunk + endMessage);
+					thisChunk = cutted[i];
+				}
+			}
+			return result;
+		}
+		else {
+			for (i in cutted) {
+				if (thisChunk.length + cutted[i].length <= config.MessageCharacterLimit - (beginMessage.length + endMessage.length + 2 + usedCount))
+					thisChunk += cutted[i] + "\n";
+				else {
+					result.push(beginMessage + thisChunk + endMessage);
+					thisChunk = cutted[i] + "\n";
+				}
+			}
+			return result;
+		}
+	}
+	else
+		return [message];
+}
+
 //Return voiceChannel from a Member or return current voice channel that bot is on right now
 function getVoiceChannel(Member) {
 	let currConnection = getCurrentVoiceConnection();
@@ -171,21 +206,25 @@ function prepareForPlaybackOnChannel(guildMember, permissionLevel = {}, joinStri
 }
 
 //Return true if guildmember has specified bit of permission
-function checkPermission(guildmember, bit=31, channel=null) {
+function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 	let permission = 0;
 	//We count bits from right to left
-	//SummonBot:				0
-	//DismissBot:				1
-	//PlayFiles:				2
-	//PlayYoutubeLinks:			3
-	//UploadLocalAudioFiles:	4
-	//DeleteLocalAudioFiles:	5
-	//RecieveListOfLocalAudios	6
-	//PauseResumeSkipPlayback	7
-	//RejoinChannel				8
-	//StopPlaybackClearQueue	9
-	//RenameLocalAudioFiles		10
-	//SetVolumeAbove100			11
+	//SummonBot:					0
+	//DismissBot:					1
+	//PlayFiles:					2
+	//PlayYoutubeLinks:				3
+	//UploadLocalAudioFiles:		4
+	//DeleteLocalAudioFiles:		5
+	//RecieveListOfLocalAudios		6
+	//PauseResumeSkipPlayback		7
+	//RejoinChannel					8
+	//StopPlaybackClearQueue		9
+	//RenameLocalAudioFiles			10
+	//SetVolumeAbove100				11
+	//HideOwnRecords				12
+	//PlayRecordsIfWasOnTheChannel	13
+	//PlayAnyonesRecords:			14
+	//PlayRandomQuote				15
 
 	//If he is admin
 	if (config.permissions.AdminsList.indexOf(guildmember.user.id) > -1)
@@ -208,6 +247,10 @@ function checkPermission(guildmember, bit=31, channel=null) {
 		permission += config.permissions.User.StopPlaybackClearQueue << 9;
 		permission += config.permissions.User.RenameLocalAudioFiles << 10;
 		permission += config.permissions.User.SetVolumeAbove100 << 11;
+		permission += config.permissions.User.HideOwnRecords << 12;
+		permission += config.permissions.User.PlayRecordsIfWasOnTheChannel << 13;
+		permission += config.permissions.User.PlayAnyonesRecords << 14;
+		permission += config.permissions.User.PlayRandomQuote << 15;
 	}
 	let result = (permission & (1 << bit)) > 0;
 	if (!result)
@@ -244,6 +287,7 @@ function recieversDestroy() {
 	let connection = getCurrentVoiceConnection();
 	if (connection) {
 		if (config.logging.ConsoleReport.ChannelJoiningLeaving) utils.report("Leaving channel '" + connection.channel.name + "'!", 'g', config.logging.LogFileReport.ChannelJoiningLeaving);
+		db.AddUserActivity(0, connection.channel.id, 1);
 		connection.channel.leave();
 	}
 }
@@ -347,7 +391,7 @@ function joinVoiceChannel(channel) {
 		channel.join()
 			.then(connection => {
 				if (config.logging.ConsoleReport.ChannelJoiningLeaving) utils.report("Joined channel '" + channel.name + "'!", 'g', config.logging.LogFileReport.ChannelJoiningLeaving);
-
+				db.AddUserActivity(0, channel.id, 0);
 				//If we have Voice Recording enabled, launch it
 				if (config.EnableRecording) {
 					startRecording(connection)
@@ -554,19 +598,28 @@ function playQueue(connection) {
 					attachEventsOnPlayback(connection);
 				} //QueueElement = { 'type': 'recording', 'searchresult': found, 'user': guildMember, 'flags': additionalFlags };
 				else if (inputObject.type == 'recording') {
-					if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("inputObject.type PASSED", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
-					CurrentPlayingSound = { 'type': 'file', 'searchresult': inputObject.searchresult, 'duration': inputObject.duration, 'user': inputObject.user, 'flags': inputObject.flags };
-					if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
+					if (inputObject.chunks) {
+						//If its not the last chunk, add next one to the queue
+						if (inputObject.chunkIndex < inputObject.chunks) {
+							let nextChunkResult = db.makeRecFileList(inputObject.searchresult.endTime, inputObject.mode, config.SearchHoursPeriod * 3600000, inputObject.usersList);
+							let QueueElement = { 'type': 'recording', 'searchresult': nextChunkResult, 'usersList': inputObject.usersList, 'mode': inputObject.mode, 'chunkIndex': inputObject.chunkIndex + 1, 'chunks': inputObject.chunks, 'user': inputObject.user, 'flags': inputObject.flags, 'duration': inputObject.duration };
+							PlayingQueue.unshift(QueueElement);
+						}
+						utils.report('Playing next recording chunk #' + inputObject.chunkIndex + ' of ' + inputObject.chunks, 'g');
+					}
+
+					CurrentPlayingSound = { 'type': 'recording', 'searchresult': inputObject.searchresult, 'duration': inputObject.duration, 'user': inputObject.user, 'flags': inputObject.flags };
+					
 					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
 					let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
-					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
+					
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
 					db.userPlayedRecsInc(inputObject.user.id); //Increment value in DB for statistics
 					let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
 					connection.playConvertedStream(ffstream, PlaybackOptions); 
-
-					playbackMessage(":record_button: Playing recording of `" + utils.getDateFormatted(CurrentPlayingSound.searchresult.startTime, "D MMM YYYY, HH:mm") + " - " + utils.getDateFormatted(CurrentPlayingSound.searchresult.endTime, "HH:mm z") + "` period" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration/1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+					if (inputObject.chunkIndex == 1 || !inputObject.chunkIndex)
+						playbackMessage(":record_button: Playing recording of `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm") + " - " + utils.getDateFormatted(inputObject.limits.end, "HH:mm z") + "` period" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
 					//Attach event listeners
 					attachEventsOnPlayback(connection);
 
@@ -729,6 +782,7 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 		if (!(OldMember.voiceChannelID) && NewMember.voiceChannelID) {
 			let ChannelMembersCount = countChannelMembers(NewMember.voiceChannel);
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " joined '" + NewMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
+			db.AddUserActivity(NewMember.user.id, NewMember.voiceChannel.id, 0);
 			if (ChannelMembersCount >= config.AutoJoinMembersAmount && config.AutoJoinTalkingRoom) {
 				if (config.logging.ConsoleReport.ChannelMembersCountDebug) utils.report("Members count: There are " + countChannelMembers(NewMember.voiceChannel) + " members in '" + NewMember.voiceChannel.name + "' channel now. (By config we join if >" + config.AutoJoinMembersAmount + ").", 'c', config.logging.LogFileReport.ChannelMembersCountDebug); //debug message
 				if (currConnection && config.SwitchVoiceRoomIfMoreMembers) {
@@ -747,6 +801,7 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 			let ChannelMembersCount = countChannelMembers(OldMember.voiceChannel);
 			let channel = OldMember.voiceChannel;
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " left '" + OldMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
+			db.AddUserActivity(NewMember.user.id, OldMember.voiceChannel.id, 1);
 			//Leave the channel if its empty
 			if (currConnection) {
 				if (countChannelMembers(currConnection.channel) == 0 && config.AutoLeaveIfAlone) {
@@ -762,6 +817,7 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 		//Member changed a voice channle
 		else if (OldMember.voiceChannelID != NewMember.voiceChannelID && OldMember.voiceChannelID && NewMember.voiceChannelID) {
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " switched to '" + NewMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
+			db.AddUserActivity(NewMember.user.id, NewMember.voiceChannel.id, 2);
 			if (currConnection && (config.SwitchVoiceRoomIfMoreMembers || countChannelMembers(currConnection.channel) == 0)) {
 				//Change the channel if it has more members than current one
 				if ((countChannelMembers(NewMember.voiceChannel) > countChannelMembers(currConnection.channel) || countChannelMembers(currConnection.channel) == 0) && NewMember.voiceChannel.id != currConnection.channel.id && NewMember.voiceChannel.joinable)
@@ -808,6 +864,8 @@ client.on('message', async message => {
                 //let additionalFlags = {};
                 let command = args[0].toLowerCase();
 				args = args.splice(1);
+				let argsLC = args
+				for (i in argsLC) argsLC[i] = argsLC[i].toLowerCase();
 
 				if (config.RestrictCommandsToSingleChannel && message.channel.id == config.ReportChannelId || config.ReactToDMCommands && message.channel.type == 'dm' || !config.RestrictCommandsToSingleChannel) {
 					utils.report("Command from " + userName + ": " + message.content.replace(/(\r\n\t|\n|\r\t)/gm, " "), 'm');
@@ -817,8 +875,17 @@ client.on('message', async message => {
 						case 'rescan':
 							{
 								if (config.EnableSoundboard && checkPermission(guildMember, 30)) {
-									sendInfoMessage("Scanning files...", message.channel, message.author);
-									db.scanSoundsFolder();
+									if (argsLC[0] == "sess" || argsLC[0] == "sessions" || argsLC[0] == "talk" || argsLC[0] == "talks") {
+										sendInfoMessage("Recalcuating talk sessions...", message.channel, message.author);
+										db.calculateTalksList(config.GapForNewTalkSession * 60000, 0, 0, 0, [], true)
+											.then(() => {
+												sendInfoMessage("Recalcuation of talk sessions is done!", message.channel, message.author);
+											});
+									}
+									else {
+										sendInfoMessage("Scanning files...", message.channel, message.author);
+										db.scanSoundsFolder();
+									}
 								}
 								break;
 							}
@@ -853,10 +920,15 @@ client.on('message', async message => {
 											for (i in found) {
 												resultList += config.CommandCharacter + found[i] + "\n";
 											}
-											resultList = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ```" + resultList + "```";
-											message.author.send(resultList)
-												.then(message => utils.report("Sent list of possible commands to '" + userName + "' user (" + message.author.id + ").", 'y'))
-												.catch(error => utils.report("Error sending message to '" + userName + "' user (" + message.author.id + "). Reason: " + error, 'r'));
+											let beginMessage = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ";
+											messagesToSend = breakMessage(resultList, beginMessage.length, "```", "```");
+											//resultList = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ```" + resultList + "```";
+											for (i in messagesToSend) {
+												let thisChunk = (i == 0 ? beginMessage : "") + messagesToSend[i];
+												message.author.send(thisChunk)
+													.then(message => { if (i == 0) utils.report("Sent list of possible commands to '" + userName + "' user (" + message.author.id + ").", 'y'); })
+													.catch(error => utils.report("Error sending message to '" + userName + "' user (" + message.author.id + "). Reason: " + error, 'r'));
+											}
 										});
 								}
 								break;
@@ -1050,66 +1122,132 @@ client.on('message', async message => {
 								}
 								break;
 							}
+						case 'talks':
+						case 'chats':
+						case 'sessions':
+						case 'recordings':
+							{
+								let talkList = db.getTalksList();
+								let begin = "__There are " + talkList.talks + " talk sessions with total recorded voice duration of " + utils.humanTime(talkList.totalDuration / 1000) + ":__" + (argsLC[0] != "all" ? " Showing last sessions. To see all use `" + config.CommandCharacter + "talks all` command" : "") + "\n";
+								let messageToSend = "";
+								for (i in talkList.result)
+									messageToSend += talkList.result[i] + "\n";
+								let footer = "**Duration** is covered time of the session, **Playback** is total voice duration.";
+								if (argsLC[0] == "all") {
+									let msgs = breakMessage(messageToSend, footer.length + begin.length, "", "");
+									sendInfoMessage("List of all sessions may be too long, therefore it's sent in private!", message.channel);
+									for (i in msgs)
+										message.author.send((i == 0 ? begin : "") + msgs[i] + (Number(i) + 1 == msgs.length ? footer : ""));
+								}
+								else {
+									let msgs = breakMessage(messageToSend, footer.length + begin.length, "", "", true);
+									message.channel.send(begin + msgs[0] + footer);
+								}
+								
+								break;
+							}
 						//Play recording
 						case 'rec':
                         case 'playrec':
                         case 'repeat':
                         case 'quote':
 							{
-								if (config.EnableSoundboard && checkPermission(guildMember, 30, message.channel)) {
+								if (config.EnableSoundboard) {
                                     
                                     if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand", 'start') + " Recieved command!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
                                     //Get list of users that were mentioned
                                     let users = message.content.match(/([0-9]{9,})/gm);
 									if (!users) users = [];
-									
-                                    let sequenceMode = true;
-									//If there is no date, use 'ago' time, else use random
-									let reqDate = additionalFlags['date'] ? additionalFlags['date'].getTime() : (additionalFlags['start'] ? Date.now() - additionalFlags['start'] * 1000 : additionalFlags['timetag'] ? Date.now() - additionalFlags['timetag'] * 1000 : db.getRecDates(users).random);
-									
+									let sessionInfo = null;
+									if (additionalFlags['id'])
+										sessionInfo = db.getTalkSession(additionalFlags['id']);
+
+									let sequenceMode = true;
+									//If there is 'id' then use sessionInfo data, else if no date, use 'ago' time, else use random
+									let reqDate = sessionInfo ? sessionInfo.startTime-1 :
+										additionalFlags['date'] ? additionalFlags['date'].getTime() :
+										(additionalFlags['start'] ? Date.now() - additionalFlags['start'] * 1000 :
+											additionalFlags['timetag'] ? Date.now() - additionalFlags['timetag'] * 1000 :
+													db.getRecDates(users).random);
+
+									if (sessionInfo) console.log(sessionInfo);
+
+
+									//Get user permissions
+									let userPresence = db.CheckUserPresence(message.author.id, reqDate);
+									let permPlayIfWasOnChannel = checkPermission(guildMember, 13, message.channel, false);
+									let permPlayAnyonesRecord = checkPermission(guildMember, 14, message.channel, false);
+									let permPlayRandomQuote = checkPermission(guildMember, 15, message.channel, false);
+
+									//If user does not have permission to playback whole duration, cut it
+									let endTime = 0;
+									if (!permPlayAnyonesRecord && permPlayIfWasOnChannel && userPresence.presented) {
+										endTime = sessionInfo ? sessionInfo.endTime > userPresence.left ? userPresence.left : sessionInfo.endTime : 0;
+									}
+
                                     //If there is no exact date, no start mark and no timetag, or command is quote => make it 'phrase'
-									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['start'] || command == 'quote')
+									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['id'] && !additionalFlags['start'] || command == 'quote')
 										sequenceMode = false;
 									
 									//If specified duration is withing the limit, use it, otherwise use default value from config
 									let duration = sequenceMode ?
-										additionalFlags['duration'] > 0 && (additionalFlags['duration'] < config.MaximumDurationToPlayback || config.MaximumDurationToPlayback==0) ? additionalFlags['duration'] * 1000 : config.DefaultRecPlaybackDuration * 1000 :
+										additionalFlags['duration'] > 0 && (additionalFlags['duration'] < config.MaximumDurationToPlayback || config.MaximumDurationToPlayback == 0) ? additionalFlags['duration'] * 1000 : sessionInfo ? sessionInfo.duration*1.5 : config.DefaultRecPlaybackDuration * 1000 :
 										additionalFlags['duration'] > 0 ? additionalFlags['duration']*1000 : config.PhraseMsDuration;
 									
 									let mode = sequenceMode ?
-										{ how: 'sequence', duration: duration, gapToStop: config.GapDurationToStopPlayback * 1000, gapToAdd: config.GapsBetweenSayingsMs } :
+										{ how: 'sequence', duration: duration, gapToStop: config.GapForNewTalkSession * 60000, gapToAdd: config.GapsBetweenSayingsMs, endTime: endTime } :
 										{ how: 'phrase', minDuration: duration, allowedGap: config.PhraseAllowedGapMsTime, gapToAdd: config.GapsBetweenSayingsMs };
 									
-									let found = db.makeRecFileList(reqDate, mode, config.SearchHoursPeriod * 3600000, users);
-									
-									if (found) {
-										prepareForPlaybackOnChannel(guildMember)
-											.then((connection) => {
-												if (connection) {
-													if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-													//Create Queue element
-													QueueElement = { 'type': 'recording', 'searchresult': found, 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
-													//If something is playing right now
-													if (soundIsPlaying) {
-														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-														//Stop or pause the playback (depending on length of playing sound)
-														stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration));
-														//Add to the front position in queue
-														PlayingQueue.unshift(QueueElement);
-														//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+									if (!sequenceMode && permPlayRandomQuote ||
+										(sequenceMode && (userPresence.presented && permPlayIfWasOnChannel || permPlayAnyonesRecord))) {
+
+										let found = db.makeRecFileList(reqDate, mode, config.SearchHoursPeriod * 3600000, users);
+
+										if (found) {
+											prepareForPlaybackOnChannel(guildMember)
+												.then((connection) => {
+													if (connection) {
+														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+
+														if (sequenceMode) {
+															mode.duration = config.RecPlaybackChunkDuration * 1000;
+															let firstChunk = db.makeRecFileList(found.startTime - 1, mode, config.SearchHoursPeriod * 3600000, users);
+															//Create Queue element
+															QueueElement = { 'type': 'recording', 'searchresult': firstChunk, 'mode': mode, 'limits': { start: found.startTime, end: found.endTime }, 'usersList': users, 'chunkIndex': 1, 'chunks': Math.ceil(found.duration / (config.RecPlaybackChunkDuration * 1000)), 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
+														}
+														else {
+															//Create Queue element
+															QueueElement = { 'type': 'recording', 'searchresult': found, 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
+														}
+														//If something is playing right now
+														if (soundIsPlaying) {
+															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+															//Stop or pause the playback (depending on length of playing sound)
+															stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration));
+															//Add to the front position in queue
+															PlayingQueue.unshift(QueueElement);
+															//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+														}
+														//Nothing is playing right now
+														else {
+															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+															PlayingQueue.unshift(QueueElement);
+															handleQueue('newSoundRequest');
+														}
 													}
-													//Nothing is playing right now
-													else {
-														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-														PlayingQueue.unshift(QueueElement);
-														handleQueue('newSoundRequest');
-													}
-												}
-											});
+												});
+										}
+										else
+											sendInfoMessage("Nothing was found.", message.channel, message.author);
 									}
-									else
-										sendInfoMessage("Nothing was found.", message.channel, message.author);
-                                  
+									else {
+										if (!sequenceMode && !permPlayRandomQuote)
+											sendInfoMessage("You don't have permission to play random quotes.", message.channel, message.author);
+										else if (sequenceMode && userPresence.presented && !permPlayIfWasOnChannel && !permPlayAnyonesRecord)
+											sendInfoMessage("You were not on the channel at that time and have no permission to playback this.", message.channel, message.author);
+										else
+											sendInfoMessage("You don't have permission for that.", message.channel, message.author);
+									}
                                 }
                                 break;
 							}

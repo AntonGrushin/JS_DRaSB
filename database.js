@@ -62,6 +62,8 @@ module.exports = {
 			let CreateSettingsDB = db.prepare('CREATE TABLE IF NOT EXISTS `settings` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `guildId` INTEGER, `enableSB` INTEGER, `enableRec` INTEGER, `ReportChannelId` INTEGER )');
 			let CreateSoundsDB = db.prepare('CREATE TABLE IF NOT EXISTS "sounds" ( `filenameFull` TEXT UNIQUE, `filename` TEXT, `extension` TEXT, `volume` REAL DEFAULT 100, `duration` REAL DEFAULT 0, `size` INTEGER DEFAULT 0, `bitrate` INTEGER DEFAULT 0, `playedCount` INTEGER DEFAULT 0, `uploadedBy` INTEGER DEFAULT 0, `uploadDate` INTEGER, `lastTimePlayed` INTEGER, `exists` INTEGER DEFAULT 1, PRIMARY KEY(`filenameFull`) )');
 			let CreateUsersDB = db.prepare('CREATE TABLE IF NOT EXISTS "users" ( `userid` INTEGER UNIQUE, `name` TEXT, `guildName` TEXT, `volume` REAL DEFAULT 20.0, `playedSounds` INTEGER DEFAULT 0, `playedYoutube` INTEGER DEFAULT 0, `playedRecordings` INTEGER DEFAULT 0, `lastCommand` INTEGER, `lastRecording` INTEGER, `recDuration` INTEGER DEFAULT 0, `recFilesCount` INTEGER DEFAULT 0, `uploadedSounds` INTEGER DEFAULT 0, PRIMARY KEY(`userid`) )');
+			let CreateTalkSessionsDB = db.prepare('CREATE TABLE IF NOT EXISTS `talk_sessions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `startTime` INTEGER, `endTime` INTEGER, `duration` INTEGER, `usersCount` INTEGER, `usersList` TEXT, `count` INTEGER )');
+			let CreatUserActivityDB = db.prepare('CREATE TABLE IF NOT EXISTS `user_activity_log` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `time` INTEGER, `channel` INTEGER, `action` INTEGER )');
 
 			try {
 				//Execute DB creation
@@ -71,6 +73,8 @@ module.exports = {
 					CreateSettingsDB.run();
 					CreateSoundsDB.run();
 					CreateUsersDB.run();
+					CreateTalkSessionsDB.run();
+					CreatUserActivityDB.run();
 				});
 				createDBResult();
 
@@ -390,9 +394,14 @@ module.exports = {
 
 						callback();
 					}, () => {
-						utils.report("Found " + checkCount + " voice recordings (Duration " + Math.floor(totalDuration / 36000) / 100 + " hours, size " + Math.floor(100 * totalSize / 1048576) / 100 + " Mb). Database updated!", 'g');
+						utils.report("Found " + checkCount + " voice recordings (Duration " + Math.floor(totalDuration / 36000) / 100 + " hours, size " + Math.floor(100 * totalSize / 1048576) / 100 + " Mb). Creating talk sessions...", 'g');
 						scanRecordingsFolderDBTransaction(dataToInsert);
-						return resolve();
+
+						this.calculateTalksList(config.GapForNewTalkSession * 60000, 0, 0, 0, [], true)
+							.then(() => {
+								return resolve();
+							});
+						
 					});
 				});
 			} catch (err) {
@@ -454,7 +463,7 @@ module.exports = {
 	},
 
 	//Create a list of files based on time and user request
-	makeRecFileList: function (dateMs, mode = { how: 'sequence', duration:300000, gapToStop:30000, gapToAdd:100 }, timeLimitMs=0, users = [], includeHidden=false) {
+	makeRecFileList: function (dateMs, mode = { how: 'sequence', duration:300000, gapToStop:30000, gapToAdd:100, endTime:0 }, timeLimitMs=0, users = [], includeHidden=false) {
         let foundResult = false;
         let peneterated = false;
         let currentResultDuration = 0;
@@ -472,7 +481,7 @@ module.exports = {
 		let channelsToMix = [];
 		let additionalCondition = "";
 		//let endTimeCut = mode.how == "sequence" ? dateMs + config.SearchHoursPeriod * 3600000 : dateMs + timeLimitMs;
-		let endTimeCut = dateMs + config.SearchHoursPeriod * 3600000;
+		let endTimeCut = mode.endTime ? mode.endTime : dateMs + config.SearchHoursPeriod * 3600000;
 		
 		function setOutputParams() {
 			output['list'] = result;
@@ -499,7 +508,7 @@ module.exports = {
 			}
 			let inputParams = Object.assign({}, { recDurationThreshold: config.IgnoreRecordingDuration, startTime: dateMs, endTime: endTimeCut }, usersDict);
 			
-			const recStatement = db.prepare('SELECT filename, startTime, userId, duration FROM recordings WHERE duration>$recDurationThreshold AND startTime>$startTime AND startTime<$endTime ' + additionalCondition + " ORDER BY startTime ASC");
+			const recStatement = db.prepare('SELECT filename, startTime, userId, duration FROM recordings WHERE `exists`=1 AND duration>$recDurationThreshold AND startTime>$startTime AND startTime<$endTime ' + additionalCondition + " ORDER BY startTime ASC");
 			for (const rec of recStatement.iterate(inputParams)) {
 				
 				//If its first iteration
@@ -571,6 +580,24 @@ module.exports = {
 				}
 				//mode: { how: 'phrase', minDuration:3000, allowedGap:300, gapToAdd:100 } - search for a phrase that is longer than minDuration and has pauses between files less than allowedGap ms
 				else if (mode.how == 'phrase') {
+					if (currentResultDuration >= mode.minDuration && currentResultDuration && (!lastElement.startTime || rec.startTime - (lastElement.startTime + lastElement.duration) > mode.allowedGap)) {
+						setOutputParams();
+						return output;
+					}
+					else {
+						if (!lastElement.filename || (lastElement.userId == rec.userId && rec.startTime - (lastElement.startTime + lastElement.duration) <= mode.allowedGap)) {
+							currentResultDuration += rec.duration;
+							result.push({ file: path.resolve(__dirname, config.folders.VoiceRecording, rec['filename']) });
+							
+						}
+						//Last result didnt fit, start over again
+						else {
+							currentResultDuration = rec.duration;
+							StartTime = rec.startTime;
+							result = [];
+						}
+						lastElement = rec;
+					}
 					return false;
 				}
 
@@ -586,5 +613,191 @@ module.exports = {
 			}
 		} catch (err) { handleError(err); }
 		return false;
+	},
+
+	// =========== TALK SESSIONS ===========
+	/* DB structure `talk_sessions`
+		`id`	INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+		`startTime`	INTEGER,
+		`endTime`	INTEGER,
+		`duration`	INTEGER,
+		`usersCount`	INTEGER,
+		`usersList`	TEXT,
+		`count`	INTEGER                     */
+
+	//Add record to talk_sessions table
+	AddTalkSession: function (ResultListElement) {
+		try {
+			db.prepare('INSERT INTO "talk_sessions" (startTime, endTime, duration, usersCount, usersList, count) VALUES ($startTime, $endTime, $duration, $usersCount, $usersList, $count)').run({ startTime: ResultListElement.start, endTime: ResultListElement.end, duration: ResultListElement.duration, usersCount: ResultListElement.users.length, usersList: JSON.stringify(ResultListElement.users), count: ResultListElement.count });
+		} catch (err) { handleError(err); }
+	},
+
+	//Calculate list of 'talk sessions' based on user, duration and gap between records
+	calculateTalksList: function (gapForNextTalkMs, minTalkDuration = 0, startTime = 0, EndTime = 0, users = [], addToDB = false) {
+		return new Promise((resolve, reject) => {
+			try {
+				let thisStartTime = 0;
+				let lastRecordTime = 0;
+				let ThisDuration = 0;
+				let recCount = 0
+				let userList = []
+				function resetVariables() {
+					thisStartTime = 0;
+					ThisDuration = 0;
+					lastRecordTime = 0;
+					recCount = 0
+					userList = [];
+				}
+				let additionalCondition = "";
+				let flags = {};
+				let ResultList = [];
+				//add start time
+				if (startTime) {
+					additionalCondition += " AND startTime>$startTime ";
+					flags['startTime'] = startTime;
+				}
+				//add end time
+				if (EndTime) {
+					additionalCondition += " AND startTime<$endTime ";
+					flags['endTime'] = EndTime;
+				}
+				//add user list
+				if (users.length > 0) {
+					additionalCondition += " AND (";
+					for (i in users) {
+						additionalCondition += " userId=$user" + i + "r OR";
+						flags['user' + i + "r"] = users[i];
+					}
+					additionalCondition = additionalCondition.slice(0, additionalCondition.length - 2);
+					additionalCondition += ")";
+				}
+				const result = db.prepare('SELECT * FROM recordings WHERE 1 ' + additionalCondition + " ORDER BY startTime ASC").all(flags);
+				for (i in result) {
+					//Check if current record is too far away
+					if (result[i]['startTime'] - lastRecordTime >= gapForNextTalkMs) {
+						//If current talk is long enough and it has more that one users and recordings add it to result list
+						if (ThisDuration > minTalkDuration && userList.length > 1 && recCount > 0)
+							ResultList.push({ start: thisStartTime, end: lastRecordTime, duration: ThisDuration, count: recCount, users: userList });
+						resetVariables();
+					}
+					if (!thisStartTime)
+						thisStartTime = result[i].startTime;
+					if (userList.indexOf(result[i]['userId']) == -1)
+						userList.push(result[i]['userId']);
+					lastRecordTime = result[i].startTime;
+					ThisDuration += result[i].duration;
+					recCount++;
+				}
+				//Add records to the database
+				if (addToDB) {
+					let execTransaction = db.transaction(() => {
+						db.prepare('DELETE FROM "talk_sessions"').run();
+						for (i in ResultList)
+							this.AddTalkSession(ResultList[i]);
+					});
+					execTransaction();
+					utils.report("Added " + ResultList.length + " talk sessions.", 'g');
+				}
+				return resolve(ResultList);
+			} catch (err) {
+				handleError(err);
+				return resolve([]);
+			}
+		});
+	},
+
+	//Get list of 'talk sessions' from the database
+	getTalksList: function (startTime = 0, limit=0) {
+		let output = { result: [], totalDuration: 0, talks: 0 };
+		try {
+			//Get users name list
+			const serverUsers = db.prepare('SELECT userid, guildName FROM users').all();
+			let usernames = {};
+			for (i in serverUsers)
+				usernames[serverUsers[i].userid] = serverUsers[i].guildName;
+			//Gte talks list
+			const rows = db.prepare('SELECT * FROM talk_sessions WHERE startTime>$startTime ORDER BY startTime ASC' + (limit > 0 ? " LIMIT $limit" : "")).all({ startTime: startTime, limit: limit });
+			
+			for (i in rows) {
+				//result.push("`id45` __Jan 23 2018 21:54 CET__ (Duration: 45 minutes, Playback: 30 min).  3 users: *Falanor, FunkyJunky, Coronatorum*");
+				output.totalDuration += rows[i].duration;
+				output.talks++;
+				let users = JSON.parse(rows[i].usersList);
+				let userList = "";
+				for (user in users)
+					userList += usernames[users[user]] + ", ";
+				if (userList)
+					userList = userList.slice(0, userList.length - 2);
+				output.result.push("`id" + rows[i].id + "` __" + utils.getDateFormatted(rows[i].startTime, "ddd D MMM YYYY HH:mm z") + "__ (Duration " + utils.humanTime((rows[i].endTime - rows[i].startTime) / 1000) + ", Playback " + utils.humanTime(rows[i].duration / 1000) + "). " + rows[i].usersCount+" users" + (rows[i].usersCount <= 5 ? ": *" + userList + "*;" : ";"));
+			}
+		} catch (err) { handleError(err); }
+		return output;
+	},
+
+	getTalkSession: function (id) {
+		try {
+			return db.prepare('SELECT * FROM talk_sessions WHERE id=?').get(id);
+		} catch (err) { handleError(err); }
+	},
+
+	// =========== USER ACTIVITY LOG ===========
+	/* DB structure `user_activity_log`
+		`id`	INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+		`userId`	INTEGER,
+		`time`	INTEGER,
+		`channel`	INTEGER,
+		`action`	INTEGER                     */
+
+	// Actions: 0 - Joined, 1 - Left, 2 - Switched
+
+	//Add activity record
+	AddUserActivity: function (UserId, channelId, action) {
+		try {
+			db.prepare('INSERT INTO "user_activity_log" (userId, time, channel, action) VALUES ($userId, $time, $channel, $action)').run({ userId: UserId, time: Date.now(), channel: channelId, action: action });
+		} catch (err) { handleError(err); }
+	},
+
+	//Return information about user's presence on the channel at the given time
+	UserPresenceInfo: function (userId, time, channel=null) {
+		let result = { presented: false };
+		
+		//Last action of this user before time
+		let before = db.prepare("SELECT `time`, `action`, channel FROM user_activity_log WHERE `time`<=$time AND userId=$userId ORDER BY `time` DESC LIMIT 1").get({ time: time, userId: userId });
+		if (before) {
+			//If last action was joining or switching
+			if ((before.action == 0 || before.action == 2) && (channel ? before.channel == channel : true)) {
+				result['joined'] = before.time;
+				result['channel'] = before.channel;
+				result.presented = true;
+				//Next action of this user after time
+				let after = db.prepare("SELECT `time`, `action`, channel FROM user_activity_log WHERE `time`>$time AND userId=$userId ORDER BY `time` ASC LIMIT 1").get({ time: time, userId: userId });
+				if (after) {
+					if (after.action == 1 || after.action == 2) {
+						result['left'] = after.time;
+					}
+				}
+			}
+		}
+		return result;
+	},
+
+	//Return true if user was on the channel at this time
+	CheckUserPresence: function (userId, time, channel=null) {
+		let result = { presented: false };
+		//Bot's presence
+		let botPr = this.UserPresenceInfo(0, time, channel);
+		
+		//User's presence
+		let userPr = this.UserPresenceInfo(userId, time, botPr.presented ? botPr.channel : channel);
+		
+
+		if (userPr.presented && botPr.presented) {
+			result.presented = true;
+			let lastTime = Math.min(userPr.left, botPr.left);
+			if (lastTime) result.lastTime = lastTime;
+		}
+
+		return result;
 	}
+
 }

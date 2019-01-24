@@ -1,5 +1,5 @@
 {
-  "name": "JS_DRaSB",
+  "name": "js_drasb",
   "version": "1.1.0",
   "description": "This is a JavaScript Node.js Discord bot based on discord.js library that is meant to perform automatic recording of a discord channel and play music/sounds as a soundboard or a playlist bot.",
   "main": "bot.js",
@@ -23,7 +23,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AntonGrushin/JSSB.git"
+    "url": "git+https://github.com/AntonGrushin/JS_DRaSB.git"
   },
   "keywords": [
     "discord",

@@ -41,6 +41,9 @@ module.exports = {
 	//Command character or starting sequence of characters
 	CommandCharacter: "?",
 
+	//Character limit per message
+	MessageCharacterLimit: 2000,
+
 	//Allow audio uploading throught direct messages
 	AcceptDirectMessagesAudio: true,
 
@@ -51,7 +54,7 @@ module.exports = {
 	StrictAudioCommands: false,
 
 	//Delete user's command on the command channel
-	DeleteUserCommands: true,
+	DeleteUserCommands: false,
 
 	//React only to commands on 'ReportChannelId' channel
 	RestrictCommandsToSingleChannel: false,
@@ -162,16 +165,20 @@ module.exports = {
 	SearchHoursPeriod: 40,
 
 	//What should be maximum allowed duration of playing recordings (in seconds). 0 for no limitation
-	MaximumDurationToPlayback: 300,
+	MaximumDurationToPlayback: 0,
 
-	//Default duration to playback if no duration specified
-	DefaultRecPlaybackDuration: 300,
+	//Default duration to playback if no duration specified, 0 means untill next Talk Settion
+	DefaultRecPlaybackDuration: 0,
 
-	//If gap between recorded audios is more than this amount of seconds stop the playback since conversation was probably over. Set to 0 for no limitation.
-	GapDurationToStopPlayback: 10 * 60,
+	//Due to technical limitation (argument list has a limit depending on system: Windows ~32000 characters, Linux ~2097152) we have to play recording in 'chunks'
+	//   Here you set duration of those chunks in seconds
+	RecPlaybackChunkDuration: 60,
 
-	//Make sure there is this amount of ms getween recorded files (If current gat is bigger, it will be reduced to this amount, if smaller, increased)
+	//Make sure there is this amount of ms getween recorded files when playing (If current gap is bigger, it will be reduced to this amount, if smaller, increased)
 	GapsBetweenSayingsMs: 50,
+
+	//Gaps between previous record to consider it as a new 'talk session', minutes
+	GapForNewTalkSession: 20,
 
 	//Duration of 'phrase' in milliseconds. Recordings that have duration longer than this, will be considered as 'phrase' or 'quote'.
 	PhraseMsDuration: 3000,
@@ -238,6 +245,10 @@ module.exports = {
 			RejoinChannel: true,
 			StopPlaybackClearQueue: true,
 			SetVolumeAbove100: false,
+			HideOwnRecords: false,
+			PlayRecordsIfWasOnTheChannel: true,
+			PlayAnyonesRecords: false,
+			PlayRandomQuote: true,
         },
     },
 

@@ -226,6 +226,10 @@ module.exports = {
 		let ttagResult = inString.match(/[ ]+([0-9.:mhsd]+)/);
 		if (ttagResult)
 			output['timetag'] = this.toSeconds(ttagResult[1]);
+		//Id (of talk session)
+		let idResult = inString.match(/[ ]+[id]+([0-9]+)/);
+		if (idResult)
+			output['id'] = Number(idResult[1]);
 		
 		//Effects
 		let effResult = inString.match(/[ ]+(echo|pot|telephone|telep|phone|tube|bath|can|iron|horn|pitch|pitchhigh|ph|pitchlow|pl|vibrato|vib|crying|cry|chorus|choir)([ ]{1,}[\-0-9.]{1,}|)([ ]{1,}[\-0-9.]{1,}|)/g);
