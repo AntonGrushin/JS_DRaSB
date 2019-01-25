@@ -357,7 +357,7 @@ function startRecording(connection) {
 										});
 										//Add to the database
 										let FileProps = fs.statSync(targetFile)
-										db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0);
+										db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0, false);
 									})
 									.output(targetFile)
 									.run();
@@ -618,8 +618,13 @@ function playQueue(connection) {
 					db.userPlayedRecsInc(inputObject.user.id); //Increment value in DB for statistics
 					let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
 					connection.playConvertedStream(ffstream, PlaybackOptions); 
-					if (inputObject.chunkIndex == 1 || !inputObject.chunkIndex)
+					if ((inputObject.chunkIndex == 1 || !inputObject.chunkIndex) && inputObject.mode.how == 'sequence')
 						playbackMessage(":record_button: Playing recording of `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm") + " - " + utils.getDateFormatted(inputObject.limits.end, "HH:mm z") + "` period" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+					else if (inputObject.mode.how == 'phrase') {
+						//Get name of that user
+						//let quotedUser = client.guilds.get(config.guildId).members.get()
+						playbackMessage(":speaking_head: Playing quote of <@" + inputObject.searchresult.author + "> `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm z") + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+					}
 					//Attach event listeners
 					attachEventsOnPlayback(connection);
 
@@ -1108,7 +1113,7 @@ client.on('message', async message => {
 											playbackMessage(":stop_button: Playback stopped by " + getUserTagName(message.author) + "." + (queueElements > 0 ? " There were " + queueElements + " records in the queue with total duration of " + utils.humanTime(queueDuration) + "." : ""));
 										}
 										else {
-											utils.report("Nothing is playing, clearing the queue." + (queueElements > 0 ? " There were " + queueElements + " records in the queue with total duration of " + utils.humanTime(queueDuration) : ""), 'y');
+											utils.report("Nothing is playing, clearing the queue." + (queueElements > 0 ? " There were " + queueElements + " records in the queue with total duration of " + utils.humanTime(queueDuration/1000) : ""), 'y');
 										}
 									}
 									PlayingQueue = [];
@@ -1150,7 +1155,8 @@ client.on('message', async message => {
 						case 'rec':
                         case 'playrec':
                         case 'repeat':
-                        case 'quote':
+						case 'quote':
+						case 'q':
 							{
 								if (config.EnableSoundboard) {
                                     
@@ -1167,11 +1173,7 @@ client.on('message', async message => {
 									let reqDate = sessionInfo ? sessionInfo.startTime-1 :
 										additionalFlags['date'] ? additionalFlags['date'].getTime() :
 										(additionalFlags['start'] ? Date.now() - additionalFlags['start'] * 1000 :
-											additionalFlags['timetag'] ? Date.now() - additionalFlags['timetag'] * 1000 :
-													db.getRecDates(users).random);
-
-									if (sessionInfo) console.log(sessionInfo);
-
+											additionalFlags['timetag'] ? Date.now() - additionalFlags['timetag'] * 1000 : 0);
 
 									//Get user permissions
 									let userPresence = db.CheckUserPresence(message.author.id, reqDate);
@@ -1186,13 +1188,13 @@ client.on('message', async message => {
 									}
 
                                     //If there is no exact date, no start mark and no timetag, or command is quote => make it 'phrase'
-									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['id'] && !additionalFlags['start'] || command == 'quote')
+									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['id'] && !additionalFlags['start'] || command == 'quote' || command == 'q')
 										sequenceMode = false;
 									
 									//If specified duration is withing the limit, use it, otherwise use default value from config
 									let duration = sequenceMode ?
 										additionalFlags['duration'] > 0 && (additionalFlags['duration'] < config.MaximumDurationToPlayback || config.MaximumDurationToPlayback == 0) ? additionalFlags['duration'] * 1000 : sessionInfo ? sessionInfo.duration*1.5 : config.DefaultRecPlaybackDuration * 1000 :
-										additionalFlags['duration'] > 0 ? additionalFlags['duration']*1000 : config.PhraseMsDuration;
+										additionalFlags['timetag'] ? additionalFlags['timetag'] : additionalFlags['duration'] > 0 ? additionalFlags['duration']*1000 : config.PhraseMsDuration;
 									
 									let mode = sequenceMode ?
 										{ how: 'sequence', duration: duration, gapToStop: config.GapForNewTalkSession * 60000, gapToAdd: config.GapsBetweenSayingsMs, endTime: endTime } :
@@ -1200,7 +1202,7 @@ client.on('message', async message => {
 									
 									if (!sequenceMode && permPlayRandomQuote ||
 										(sequenceMode && (userPresence.presented && permPlayIfWasOnChannel || permPlayAnyonesRecord))) {
-
+										
 										let found = db.makeRecFileList(reqDate, mode, config.SearchHoursPeriod * 3600000, users);
 
 										if (found) {
@@ -1217,7 +1219,7 @@ client.on('message', async message => {
 														}
 														else {
 															//Create Queue element
-															QueueElement = { 'type': 'recording', 'searchresult': found, 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
+															QueueElement = { 'type': 'recording', 'searchresult': found, 'mode': mode, 'limits': { start: found.startTime, end: found.endTime }, 'usersList': users, 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
 														}
 														//If something is playing right now
 														if (soundIsPlaying) {

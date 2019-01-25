@@ -21,7 +21,7 @@ const path = require('path');
 const utils = require('./utils.js');
 const ffmpeg = require('fluent-ffmpeg');
 const async = require("async");
-const sqlite3 = require('sqlite3').verbose();
+//const sqlite3 = require('sqlite3').verbose();
 //var db = new sqlite3.Database('sqlite.db');
 //var db = new sqlite3.Database(':memory:');
 const Database = require('better-sqlite3');
@@ -30,16 +30,21 @@ const db = new Database('sqlite.db', { memory: false });
 //Private variables
 var usersVolume = {};
 var soundsDB = {};
+var lastRecs = [];
+var recBuffer = {};
 
 //Technical
 var lastRecDBUpdate = 0;
 var RecUpdateInQueue = false;
+var phrasesToAddToDBBuffer = [];
+var lastRecTime = 0;
 
 //SQL statements
 var userUpdateAddSqlStmt;
 var soundUpdateAddSqlStmt;
 var recordingUpdateAddSqlStmt;
 var recordingAddSqlStmt;
+var addPhraseSqlStmt;
 
 function handleError(error) {
 	if (error) utils.report("Database error: " + error, 'r');
@@ -64,6 +69,7 @@ module.exports = {
 			let CreateUsersDB = db.prepare('CREATE TABLE IF NOT EXISTS "users" ( `userid` INTEGER UNIQUE, `name` TEXT, `guildName` TEXT, `volume` REAL DEFAULT 20.0, `playedSounds` INTEGER DEFAULT 0, `playedYoutube` INTEGER DEFAULT 0, `playedRecordings` INTEGER DEFAULT 0, `lastCommand` INTEGER, `lastRecording` INTEGER, `recDuration` INTEGER DEFAULT 0, `recFilesCount` INTEGER DEFAULT 0, `uploadedSounds` INTEGER DEFAULT 0, PRIMARY KEY(`userid`) )');
 			let CreateTalkSessionsDB = db.prepare('CREATE TABLE IF NOT EXISTS `talk_sessions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `startTime` INTEGER, `endTime` INTEGER, `duration` INTEGER, `usersCount` INTEGER, `usersList` TEXT, `count` INTEGER )');
 			let CreatUserActivityDB = db.prepare('CREATE TABLE IF NOT EXISTS `user_activity_log` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `time` INTEGER, `channel` INTEGER, `action` INTEGER )');
+			let CreatePhrasesDB = db.prepare('CREATE TABLE IF NOT EXISTS "phrases" ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `idStart` INTEGER, `recs` INTEGER, `timeStart` INTEGER, `duration` INTEGER )');
 
 			try {
 				//Execute DB creation
@@ -75,6 +81,7 @@ module.exports = {
 					CreateUsersDB.run();
 					CreateTalkSessionsDB.run();
 					CreatUserActivityDB.run();
+					CreatePhrasesDB.run();
 				});
 				createDBResult();
 
@@ -114,6 +121,7 @@ module.exports = {
 				this.soundUpdateAddPrepare();
 				this.recordingUpdateAddPrepare();
 				this.recordingAddPrepare();
+				this.addPhrasePrepare();
 
 				return resolve();
 			} catch (err) {
@@ -262,7 +270,7 @@ module.exports = {
 			let result = {};
 			try {
 				//First, search for a full name
-				let fullSearch = db.prepare("SELECT filenameFull, filename, extension, volume, duration, `size`, bitrate, playedCount, uploadedBy, uploadDate, lastTimePlayed from `sounds` WHERE filename=? AND `exists`=1").get(search);
+				let fullSearch = db.prepare("SELECT filenameFull, filename, extension, volume, duration, `size`, bitrate, playedCount, cast(uploadedBy AS text) AS uploadedBy, uploadDate, lastTimePlayed from `sounds` WHERE filename=? AND `exists`=1").get(search);
 				//Found exact match
 				if (fullSearch) {
 					result['count'] = 1;
@@ -270,7 +278,7 @@ module.exports = {
 					return resolve(result);
 				}
 				else {
-					let partialSearch = db.prepare("SELECT filenameFull, filename, extension, volume, duration, size, bitrate, playedCount, uploadedBy, uploadDate, lastTimePlayed from `sounds` WHERE filename LIKE ? AND `exists`=1 ORDER BY filename ASC").all("%"+search.toLowerCase()+"%");
+					let partialSearch = db.prepare("SELECT filenameFull, filename, extension, volume, duration, size, bitrate, playedCount, cast(uploadedBy AS text) AS uploadedBy, uploadDate, lastTimePlayed from `sounds` WHERE filename LIKE ? AND `exists`=1 ORDER BY filename ASC").all("%"+search.toLowerCase()+"%");
 					if (partialSearch) {
 						result['count'] = partialSearch.length;
 						result['sound'] = partialSearch[0];
@@ -331,7 +339,7 @@ module.exports = {
 				output.first = row.min;
 				output.last = row.max;
 				output.count = row.count;
-				output.random = Math.floor(Math.random() * (output.last - output.first)) + output.first;
+				//output.random = Math.floor(Math.random() * (output.last - output.first)) + output.first;
 				return output;
 			}
 			else
@@ -352,9 +360,14 @@ module.exports = {
 
 	//Add recording to DB (when we know its a new one for sure)
 	recordingAddPrepare: function () { recordingAddSqlStmt = db.prepare('INSERT INTO "recordings" (filename, startTime, userId, duration, size) VALUES ($filename, $startTime, $userId, $duration, $size)'); },
-	recordingAdd: function (file, startTime, duration, userId, size) {
+	recordingAdd: function (file, startTime, duration, userId, size, ignorePhrases=true) {
 		try {
-			recordingAddSqlStmt.run({ filename: file, startTime: startTime, userId: userId, duration: duration, size: size });
+			let lastOne = recordingAddSqlStmt.run({ filename: file, startTime: startTime, userId: userId, duration: duration, size: size });
+			if (!ignorePhrases && lastOne) {
+				if (lastOne.changes > 0 && lastOne.lastInsertRowid > -1) {
+					this.checkForNewPhrases({ id: lastOne.lastInsertRowid, startTime: startTime, userId: userId, duration: duration });
+				}
+			}
 		} catch (err) { handleError(err); }
 	},
 
@@ -397,11 +410,15 @@ module.exports = {
 						utils.report("Found " + checkCount + " voice recordings (Duration " + Math.floor(totalDuration / 36000) / 100 + " hours, size " + Math.floor(100 * totalSize / 1048576) / 100 + " Mb). Creating talk sessions...", 'g');
 						scanRecordingsFolderDBTransaction(dataToInsert);
 
+						//Calculate talk sessions list
 						this.calculateTalksList(config.GapForNewTalkSession * 60000, 0, 0, 0, [], true)
 							.then(() => {
-								return resolve();
+								//Scan for phrases
+								this.scanForPhrases()
+									.then(() => {
+										return resolve();
+									});
 							});
-						
 					});
 				});
 			} catch (err) {
@@ -427,7 +444,18 @@ module.exports = {
 
 				//Get files in the folder
 				let totalDurationFiles = 0;
-				fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
+				fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, outFiles) => {
+					let files = [];
+					//Delete unwanted files from this list in Windows
+					if (process.platform === "win32") {
+						while (file = outFiles.shift()) {
+							if (['.ini'].indexOf(path.extname(file).toLowerCase()) == -1)
+								files.push(file);
+						}
+					}
+					else
+						files = outFiles;
+
 					if (dbRecordsCount == files.length) {
 						//Sum up all durations
 						for (i in files) {
@@ -441,7 +469,6 @@ module.exports = {
 					let lastFileParse = utils.parseRecFilename(files[files.length - 1]);
 					let lastFileTime = lastFileParse ? lastFileParse.startTime : 0;
 
-
 					if (dbRecordsCount == files.length &&
 						firstFileTime == DBStartTime &&
 						lastFileTime == DBLastTime &&
@@ -451,6 +478,11 @@ module.exports = {
 						return resolve();
 					}
 					else {
+						//console.log("dbRecordsCount " + dbRecordsCount + " == " + files.length + "\n"
+						//	+ "firstFileTime " + firstFileTime + " == " + DBStartTime + "\n"
+						//	+ "lastFileTime " + lastFileTime + " == " + DBLastTime + "\n"
+						//	+ "totalDurationFiles" + totalDurationFiles + " == " + totalDurationFromDB);
+
 						//Rescan is needed!
 						utils.report("Found mismatch on database records and files in the '" + config.folders.VoiceRecording + "' folder! Rescanning...", 'y');
 						this.scanRecordingsFolder()
@@ -495,34 +527,38 @@ module.exports = {
 			output['GapsAdded'] = statGapsAdded;
 			output['filesCount'] = statFilesCount;
 		}
-		try {
-			let usersDict = {};
-			if (users.length > 0) {
-				additionalCondition += " AND (";
-				for (i in users) {
-					additionalCondition += " userId=$user" + i + "r OR";
-					usersDict['user' + i+"r"] = users[i];
-				}
-				additionalCondition = additionalCondition.slice(0, additionalCondition.length - 2);
-				additionalCondition += ")";
+		//Set users params
+		let usersDict = {};
+		if (users.length > 0) {
+			additionalCondition += " AND (";
+			for (i in users) {
+				additionalCondition += " userId=$user" + i + "r OR";
+				usersDict['user' + i + "r"] = users[i];
 			}
-			let inputParams = Object.assign({}, { recDurationThreshold: config.IgnoreRecordingDuration, startTime: dateMs, endTime: endTimeCut }, usersDict);
-			
-			const recStatement = db.prepare('SELECT filename, startTime, userId, duration FROM recordings WHERE `exists`=1 AND duration>$recDurationThreshold AND startTime>$startTime AND startTime<$endTime ' + additionalCondition + " ORDER BY startTime ASC");
-			for (const rec of recStatement.iterate(inputParams)) {
-				
-				//If its first iteration
-				if (result.length == 0) {
-					StartTime = rec.startTime;
-					channelsToMix.push({ lastTime: rec.startTime + rec.duration, lastOffset:0 });
-				}
-				else {
-					if (FurthestEndingTime < lastElement['startTime'] + lastElement['duration'])
-						FurthestEndingTime = lastElement['startTime'] + lastElement['duration'];
-				}
+			additionalCondition = additionalCondition.slice(0, additionalCondition.length - 2);
+			additionalCondition += ")";
+		}
 
-				//mode: { how: 'sequence', duration:300000, gapToStop:30000, gapToAdd:100 } - list files sequentially untill duration is reached or gap between files is longer than gapToStop
-				if (mode.how == 'sequence') {
+		try {
+			//mode: { how: 'sequence', duration:300000, gapToStop:30000, gapToAdd:100 } - list files sequentially untill duration is reached or gap between files is longer than gapToStop
+			if (mode.how == 'sequence') {
+
+				let inputParams = Object.assign({}, { recDurationThreshold: config.IgnoreRecordingDuration, startTime: dateMs, endTime: endTimeCut }, usersDict);
+
+				const recStatement = db.prepare('SELECT filename, startTime, cast(userId AS text) AS userId, duration FROM recordings WHERE `exists`=1 AND duration>$recDurationThreshold AND startTime>$startTime AND startTime<$endTime ' + additionalCondition + " ORDER BY startTime ASC");
+				for (const rec of recStatement.iterate(inputParams)) {
+
+					//If its first iteration
+					if (result.length == 0) {
+						StartTime = rec.startTime;
+						channelsToMix.push({ lastTime: rec.startTime + rec.duration, lastOffset: 0 });
+					}
+					else {
+						if (FurthestEndingTime < lastElement['startTime'] + lastElement['duration'])
+							FurthestEndingTime = lastElement['startTime'] + lastElement['duration'];
+					}
+
+
 					//If we reached duration or gap limit, return result
 					if (currentResultDuration >= mode.duration && currentResultDuration || (mode.gapToStop > 0 && rec['startTime'] - (lastElement['startTime'] ? (lastElement['startTime'] + lastElement['duration']) : rec['startTime']) > mode.gapToStop)) {
 						setOutputParams();
@@ -534,7 +570,7 @@ module.exports = {
 						if (FurthestEndingTime > rec['startTime']) {
 							peneterated = true;
 							//console.log("Peneteration: " + (FurthestEndingTime - rec['startTime']) + 'ms on "'+i+'"');
-							
+
 							//Check which channel is free and add file there or make a new channel
 							let needToAddNewChannel = true;
 							for (i in channelsToMix) {
@@ -577,35 +613,38 @@ module.exports = {
 						totalAudioDuration += rec['duration'];
 						lastElement = rec;
 					}
+
+
 				}
-				//mode: { how: 'phrase', minDuration:3000, allowedGap:300, gapToAdd:100 } - search for a phrase that is longer than minDuration and has pauses between files less than allowedGap ms
-				else if (mode.how == 'phrase') {
-					if (currentResultDuration >= mode.minDuration && currentResultDuration && (!lastElement.startTime || rec.startTime - (lastElement.startTime + lastElement.duration) > mode.allowedGap)) {
+			}
+			//mode: { how: 'phrase', minDuration:3000, allowedGap:300, gapToAdd:100 } - search for a phrase that is longer than minDuration and has pauses between files less than allowedGap ms
+			else if (mode.how == 'phrase') {
+				//Get min and max phrase id for this user
+				let minMax = db.prepare('SELECT cast(userId AS text) AS userId, idStart, recs FROM phrases WHERE duration>=$duration ' + additionalCondition + ' ORDER BY random() LIMIT 1').get(Object.assign({}, { duration: mode.minDuration }, usersDict));
+				if (minMax) {
+					output['author'] = minMax.userId;
+					let rows = db.prepare('SELECT filename, startTime, cast(userId AS text) AS userId, duration FROM recordings WHERE `exists`=1 AND id >= $id AND userId=$userId ORDER BY startTime ASC LIMIT $limit').all({ id: minMax.idStart, userId: minMax.userId, limit: minMax.recs });
+					if (rows) {
+						StartTime = rows[0].startTime;
+						for (i in rows) {
+							result.push({ file: path.resolve(__dirname, config.folders.VoiceRecording, rows[i]['filename']) });
+							statFilesCount++;
+							currentResultDuration = rows[i]['startTime'] + rows[i]['duration'] + currentOffset - StartTime;
+							totalAudioDuration += rows[i]['duration'];
+							lastElement = rows[i];
+							FurthestEndingTime = rows[i]['startTime'] + rows[i]['duration'];
+						}
 						setOutputParams();
 						return output;
 					}
-					else {
-						if (!lastElement.filename || (lastElement.userId == rec.userId && rec.startTime - (lastElement.startTime + lastElement.duration) <= mode.allowedGap)) {
-							currentResultDuration += rec.duration;
-							result.push({ file: path.resolve(__dirname, config.folders.VoiceRecording, rec['filename']) });
-							
-						}
-						//Last result didnt fit, start over again
-						else {
-							currentResultDuration = rec.duration;
-							StartTime = rec.startTime;
-							result = [];
-						}
-						lastElement = rec;
-					}
-					return false;
 				}
-
 			}
 			//If we looped throught all results and didnt fit output conditions
 			if (result.length > 0) {
 				if (mode.how == 'sequence') {
 					setOutputParams();
+					if (!output.list)
+						return false;
 					return output;
 				}
 				else
@@ -707,16 +746,28 @@ module.exports = {
 	},
 
 	//Get list of 'talk sessions' from the database
-	getTalksList: function (startTime = 0, limit=0) {
+	getTalksList: function (startTime = 0, limit=0, users=[]) {
 		let output = { result: [], totalDuration: 0, talks: 0 };
+		let usersCondition = "";
+		let usersDict = {};
 		try {
 			//Get users name list
 			const serverUsers = db.prepare('SELECT userid, guildName FROM users').all();
 			let usernames = {};
 			for (i in serverUsers)
 				usernames[serverUsers[i].userid] = serverUsers[i].guildName;
-			//Gte talks list
-			const rows = db.prepare('SELECT * FROM talk_sessions WHERE startTime>$startTime ORDER BY startTime ASC' + (limit > 0 ? " LIMIT $limit" : "")).all({ startTime: startTime, limit: limit });
+			//Prepare condition with users
+			if (users.length > 0) {
+				usersCondition += " AND (";
+				for (i in users) {
+					usersCondition += " usersList LIKE $user" + i + "r OR";
+					usersDict['user' + i + "r"] = users[i];
+				}
+				usersCondition = usersCondition.slice(0, usersCondition.length - 2);
+				usersCondition += ")";
+			}
+			//Get talks list
+			const rows = db.prepare('SELECT * FROM talk_sessions WHERE startTime>$startTime ' + usersCondition+' ORDER BY startTime ASC' + (limit > 0 ? " LIMIT $limit" : "")).all({ startTime: startTime, limit: limit });
 			
 			for (i in rows) {
 				//result.push("`id45` __Jan 23 2018 21:54 CET__ (Duration: 45 minutes, Playback: 30 min).  3 users: *Falanor, FunkyJunky, Coronatorum*");
@@ -798,6 +849,115 @@ module.exports = {
 		}
 
 		return result;
+	},
+
+
+	// =========== PHRASES ===========
+	/* DB structure `phrases` 
+		`id`	INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
+		`userId`	INTEGER,
+		`idStart`	INTEGER,
+		`recs`	INTEGER,
+		`timeStart`	INTEGER,
+		`duration`	INTEGER                     */
+
+	//Add a phrase to DB
+	addPhrasePrepare: function () { addPhraseSqlStmt = db.prepare('INSERT INTO "phrases" (userId, idStart, recs, timeStart, duration) VALUES ($userId, $idStart, $recs, $timeStart, $duration)'); },
+	addPhrase: function (userId, idStart, recs, timeStart, duration) {
+		try {
+			addPhraseSqlStmt.run({ userId: userId, idStart: idStart, recs: recs, timeStart: timeStart, duration: duration });
+		} catch (err) { handleError(err); }
+	},
+	//Same as above but with array
+	addPhraseObjArray: function () {
+		try {
+			if (phrasesToAddToDBBuffer.length > 0) {
+				let addPhraseDBTransaction = db.transaction(() => {
+					while (element = phrasesToAddToDBBuffer.shift()) {
+						addPhraseSqlStmt.run(element);
+					}
+				});
+				addPhraseDBTransaction();
+			}
+		} catch (err) { handleError(err); }
+	},
+
+	//Process new recording for phrases
+	checkForNewPhrases: function (row, dontAddToDBYet=false) {
+		//If there any previous records
+		if (recBuffer[row.userId]) {
+			let duration = 0;
+			let lastTime = 0;
+			for (rec in recBuffer[row.userId]) {
+				duration += recBuffer[row.userId][rec].duration;
+				lastTime = recBuffer[row.userId][rec].startTime + recBuffer[row.userId][rec].duration;
+			}
+			//if enough time passed and buffer reached needed duration, add it to phrases
+			if (duration >= config.PhraseMsDuration && row.startTime - lastTime > config.PhraseAllowedGapMsTime) {
+				if (dontAddToDBYet) {
+					let toAdd = { userId: row.userId, idStart: recBuffer[row.userId][0].id, recs: recBuffer[row.userId].length, timeStart: recBuffer[row.userId][0].startTime, duration: duration }
+					phrasesToAddToDBBuffer.push(toAdd);
+					//phrasesToAddToDBBuffer.push({ userId: row.userId, idStart: idStart, recs: recs, timeStart: timeStart, duration: duration });
+				}
+				else
+					this.addPhrase(row.userId, recBuffer[row.userId][0].id, recBuffer[row.userId].length, recBuffer[row.userId][0].startTime, duration);
+				//Reset buffer for this user
+				recBuffer[row.userId] = [];
+				recBuffer[row.userId].push(row);
+				return 1;
+			}
+			//If enough time passed but duration was not reached, remove these records
+			else if (duration < config.PhraseMsDuration && row.startTime - lastTime > config.PhraseAllowedGapMsTime) {
+
+				recBuffer[row.userId] = [];
+				recBuffer[row.userId].push(row);
+			}
+			//Else, add recording to the buffer and do nothing
+			else {
+				recBuffer[row.userId].push(row);
+			}
+		}
+		else {
+			recBuffer[row.userId] = [];
+			recBuffer[row.userId].push(row);
+			
+		}
+		return 0;
+	},
+
+	//Scan recordings for phrases
+	scanForPhrases: function () {
+		return new Promise((resolve, reject) => {
+			try {
+				let checkCount = 0;
+				let lastReportTime = 0;
+				let phrasesFound = 0;
+				db.prepare('DELETE FROM phrases').run();
+				let rows = db.prepare('SELECT id, startTime, cast(userId AS text) AS userId, duration FROM recordings WHERE `exists`=1 ORDER BY startTime ASC').all();
+
+				if (rows) {
+					for (i in rows) {
+						checkCount++;
+						phrasesFound += this.checkForNewPhrases(rows[i], true);
+						//Add to the database through a transaction if buffer is big enough
+						if (phrasesToAddToDBBuffer.length >= config.DBInsertsPerTransaction) {
+							this.addPhraseObjArray();
+						}
+
+						//Periodically report progress of the scan to the console
+						if (Date.now() - lastReportTime >= 1000 || checkCount == rows.length) {
+							utils.report("Phrases scan progress: " + checkCount + "/" + rows.length + " (" + (Math.round(10000 * checkCount / rows.length) / 100) + " %) done. Found " + phrasesFound + " phrases so far...", 'c');
+							lastReportTime = Date.now();
+						}
+					}
+					this.addPhraseObjArray();
+					return resolve(true);
+				}
+			} catch (err) {
+				handleError(err);
+				return resolve(true);
+			}
+		});
 	}
 
 }
