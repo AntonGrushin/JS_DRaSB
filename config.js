@@ -112,7 +112,7 @@ module.exports = {
 	//Switch channel if other voice room has more members than current one (even if false, bot will switch channel if there is no one left in the current one)
 	SwitchVoiceRoomIfMoreMembers: false,
 
-	//Do we pause sound playback if its considered to be 'long' sound and some short one was requested to play and resume playing after short finished?
+	//Do we pause sound playback if its considered to be 'long' sound and some short one was requested to play and resume playing after short finished? (Currently works with local files only)
 	//true: if a 'long' sound is playing and someone requested to play a short file, it will be put on pause, short file played and then resume the long sound playback
 	//false: if a sound is playing and someone requested another sound, currently playing one will be stopped and new sound played
 	EnablePausingOfLongSounds: true,

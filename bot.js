@@ -464,6 +464,19 @@ function joinVoiceChannelQueue(channel) {
 	});
 }
 
+//Check for arguments in the command
+function checkForEmptyArguments(args = [], channel = null, author = null) {
+	let noArguments = true;
+	for (i in args) {
+		if (args[i].length > 0) {
+			noArguments = false;
+			break;
+		}
+	}
+	sendInfoMessage("You did not specify any arguments in your command!", channel, author);
+
+	return noArguments;
+}
 
 //Check if we are on the channel, if we are - do nothing, if not - join it
 function checkChannelJoin(channel) {
@@ -646,6 +659,8 @@ function playQueue(connection) {
 					db.userPlayedYoutubeInc(inputObject.user.id); //Increment value in DB for statistics
 
 					//Create the stream
+					console.log(inputObject["link"]);
+					console.log(YtOptions);
 					let stream = ytdl(inputObject["link"], YtOptions)
 					stream.on('info', (videoInfo, videoFormat) => {
 						if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Recieved YouTube info message, creating dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
@@ -671,8 +686,8 @@ function playQueue(connection) {
 						recievedInfo = true;
 					});
 					stream.on('error', error => {
-						sendInfoMessage("There was an error while playing your YouTube link: " + error, config.ReportChannelId, urrentPlayingSound.user);
 						utils.report('Couldnt download video! Reason: ' + error, 'r');
+						sendInfoMessage("There was an error while playing your YouTube link: " + error, client.channels.get(config.ReportChannelId), CurrentPlayingSound.user);
 						if (stream)
 							stream.end();
 					});
@@ -698,13 +713,15 @@ function playQueue(connection) {
 }
 
 //Stop or Pause the sound
-function stopPlayback(connection, pauseTheFile = false) {
+function stopPlayback(connection, checkForLongDuration = false, newFileDurationSec=0) {
 	//Stop it, but add to the queue to play later from same position
-	if (pauseTheFile && CurrentPlayingSound) {
+	if (checkForLongDuration && CurrentPlayingSound) {
 		let nowPlaying = CurrentPlayingSound;
-		nowPlaying['played'] = CurrentPlayingSound.played ? connection.dispatcher.time + CurrentPlayingSound.played : connection.dispatcher.time;
-		//End the dispatcher
-		PlayingQueue.unshift(nowPlaying);
+		if (nowPlaying.type == 'file' && config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration && (newFileDurationSec>0 && newFileDurationSec < config.LongSoundDuration)) {
+			nowPlaying['played'] = CurrentPlayingSound.played ? connection.dispatcher.time + CurrentPlayingSound.played : connection.dispatcher.time;
+			//End the dispatcher
+			PlayingQueue.unshift(nowPlaying);
+		}
 	}
 	//End the playback
 	if (connection.dispatcher) {
@@ -867,10 +884,8 @@ client.on('message', async message => {
 				let args = message.content.substring(config.CommandCharacter.length).split(' ');
 				let additionalFlags = utils.readFlags(message.content);
                 //let additionalFlags = {};
-                let command = args[0].toLowerCase();
+				let command = args[0].toLowerCase();
 				args = args.splice(1);
-				let argsLC = args
-				for (i in argsLC) argsLC[i] = argsLC[i].toLowerCase();
 
 				if (config.RestrictCommandsToSingleChannel && message.channel.id == config.ReportChannelId || config.ReactToDMCommands && message.channel.type == 'dm' || !config.RestrictCommandsToSingleChannel) {
 					utils.report("Command from " + userName + ": " + message.content.replace(/(\r\n\t|\n|\r\t)/gm, " "), 'm');
@@ -1138,7 +1153,7 @@ client.on('message', async message => {
 								for (i in talkList.result)
 									messageToSend += talkList.result[i] + "\n";
 								let footer = "**Duration** is covered time of the session, **Playback** is total voice duration.";
-								if (argsLC[0] == "all") {
+								if (args[0].toLowerCase() == "all") {
 									let msgs = breakMessage(messageToSend, footer.length + begin.length, "", "");
 									sendInfoMessage("List of all sessions may be too long, therefore it's sent in private!", message.channel);
 									for (i in msgs)
@@ -1156,7 +1171,8 @@ client.on('message', async message => {
                         case 'playrec':
                         case 'repeat':
 						case 'quote':
-						case 'q':
+						case 'r':
+						case 'random':
 							{
 								if (config.EnableSoundboard) {
                                     
@@ -1188,7 +1204,7 @@ client.on('message', async message => {
 									}
 
                                     //If there is no exact date, no start mark and no timetag, or command is quote => make it 'phrase'
-									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['id'] && !additionalFlags['start'] || command == 'quote' || command == 'q')
+									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['id'] && !additionalFlags['start'] || command == 'random' || command == 'r')
 										sequenceMode = false;
 									
 									//If specified duration is withing the limit, use it, otherwise use default value from config
@@ -1225,7 +1241,7 @@ client.on('message', async message => {
 														if (soundIsPlaying) {
 															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 															//Stop or pause the playback (depending on length of playing sound)
-															stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration));
+															stopPlayback(connection, true);
 															//Add to the front position in queue
 															PlayingQueue.unshift(QueueElement);
 															//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
@@ -1262,6 +1278,7 @@ client.on('message', async message => {
 						case 'addnext':
 							{
 								if (config.EnableSoundboard) {
+									if (checkForEmptyArguments(args, message.channel, message.author)) return;
 									//This is Youtube link
 									if (ytdl.validateURL(args[0]) && checkPermission(guildMember, 3, message.channel)) {
 										ytdl.getBasicInfo(args[0], (err, info) => {
@@ -1317,6 +1334,8 @@ client.on('message', async message => {
 						case 'youtube':
 							{
 								if (config.EnableSoundboard && checkPermission(guildMember, 3, message.channel)) {
+									if (checkForEmptyArguments(args, message.channel, message.author)) return;
+
 									if (ytdl.validateURL(args[0])) {
 										if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("YouTubeCommand", 'start') + " Recieved command!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 										
@@ -1330,7 +1349,7 @@ client.on('message', async message => {
 													if (soundIsPlaying) {
 														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("YouTubeCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 														//Stop or pause the playback (depending on length of playing sound)
-														stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration));
+														stopPlayback(connection, true);
 														//Add to the front position in queue
 														PlayingQueue.unshift(QueueElement);
 														//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
@@ -1372,7 +1391,7 @@ client.on('message', async message => {
 																if (soundIsPlaying) {
 																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Stopping playback!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 																	//Stop or pause the playback (depending on length of playing sound)
-																	stopPlayback(connection, (config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration && found.sound.duration < config.LongSoundDuration));
+																	stopPlayback(connection, true, found.sound.duration);
 																	//Add to the front position in queue
 																	PlayingQueue.unshift(QueueElement);
 																	//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
