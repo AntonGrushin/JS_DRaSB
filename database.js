@@ -45,6 +45,7 @@ var soundUpdateAddSqlStmt;
 var recordingUpdateAddSqlStmt;
 var recordingAddSqlStmt;
 var addPhraseSqlStmt;
+var GetUserCountAtTimeSqlStmt;
 
 function handleError(error) {
 	if (error) utils.report("Database error: " + error, 'r');
@@ -68,8 +69,8 @@ module.exports = {
 			let CreateSoundsDB = db.prepare('CREATE TABLE IF NOT EXISTS "sounds" ( `filenameFull` TEXT UNIQUE, `filename` TEXT, `extension` TEXT, `volume` REAL DEFAULT 100, `duration` REAL DEFAULT 0, `size` INTEGER DEFAULT 0, `bitrate` INTEGER DEFAULT 0, `playedCount` INTEGER DEFAULT 0, `uploadedBy` INTEGER DEFAULT 0, `uploadDate` INTEGER, `lastTimePlayed` INTEGER, `exists` INTEGER DEFAULT 1, PRIMARY KEY(`filenameFull`) )');
 			let CreateUsersDB = db.prepare('CREATE TABLE IF NOT EXISTS "users" ( `userid` INTEGER UNIQUE, `name` TEXT, `guildName` TEXT, `volume` REAL DEFAULT 20.0, `playedSounds` INTEGER DEFAULT 0, `playedYoutube` INTEGER DEFAULT 0, `playedRecordings` INTEGER DEFAULT 0, `lastCommand` INTEGER, `lastRecording` INTEGER, `recDuration` INTEGER DEFAULT 0, `recFilesCount` INTEGER DEFAULT 0, `uploadedSounds` INTEGER DEFAULT 0, PRIMARY KEY(`userid`) )');
 			let CreateTalkSessionsDB = db.prepare('CREATE TABLE IF NOT EXISTS `talk_sessions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `startTime` INTEGER, `endTime` INTEGER, `duration` INTEGER, `usersCount` INTEGER, `usersList` TEXT, `count` INTEGER )');
-			let CreatUserActivityDB = db.prepare('CREATE TABLE IF NOT EXISTS `user_activity_log` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `time` INTEGER, `channel` INTEGER, `action` INTEGER )');
-			let CreatePhrasesDB = db.prepare('CREATE TABLE IF NOT EXISTS "phrases" ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `idStart` INTEGER, `recs` INTEGER, `timeStart` INTEGER, `duration` INTEGER )');
+			let CreatUserActivityDB = db.prepare('CREATE TABLE IF NOT EXISTS "user_activity_log" ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `time` INTEGER, `channel` INTEGER, `action` INTEGER, `resultUsersChannCount` INTEGER )');
+			let CreatePhrasesDB = db.prepare('CREATE TABLE IF NOT EXISTS "phrases" ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `userId` INTEGER, `idStart` INTEGER, `recs` INTEGER, `timeStart` INTEGER, `duration` INTEGER, `usersListening` INTEGER, `channel` INTEGER )');
 
 			try {
 				//Execute DB creation
@@ -89,12 +90,14 @@ module.exports = {
 				let CreatePermissionsIdx = db.prepare('CREATE INDEX IF NOT EXISTS `permissions_Id` ON `permissions` ( `UserOrRole_Id` )');
 				let CreateRecIdx = db.prepare('CREATE INDEX IF NOT EXISTS `rec_startTime_idx` ON `recordings` ( `startTime` )');
 				let CreateSoundsIdx = db.prepare('CREATE INDEX IF NOT EXISTS `sounds_filename_idx` ON `sounds` ( `filename` )');
+				let CreateActivityIdx = db.prepare('CREATE INDEX IF NOT EXISTS `user_activity_idx` ON `user_activity_log`(`time` ASC, `channel`)');
 
 				//Execute Indexes creation
 				let createIdxResult = db.transaction(() => {
 					CreatePermissionsIdx.run();
 					CreateRecIdx.run();
 					CreateSoundsIdx.run();
+					CreateActivityIdx.run();
 				});
 				createIdxResult();
 
@@ -122,6 +125,7 @@ module.exports = {
 				this.recordingUpdateAddPrepare();
 				this.recordingAddPrepare();
 				this.addPhrasePrepare();
+				this.GetUserCountAtTimePrepare();
 
 				return resolve();
 			} catch (err) {
@@ -360,12 +364,12 @@ module.exports = {
 
 	//Add recording to DB (when we know its a new one for sure)
 	recordingAddPrepare: function () { recordingAddSqlStmt = db.prepare('INSERT INTO "recordings" (filename, startTime, userId, duration, size) VALUES ($filename, $startTime, $userId, $duration, $size)'); },
-	recordingAdd: function (file, startTime, duration, userId, size, ignorePhrases=true) {
+	recordingAdd: function (file, startTime, duration, userId, size, ignorePhrases = true, channel = null, usersListening=0) {
 		try {
 			let lastOne = recordingAddSqlStmt.run({ filename: file, startTime: startTime, userId: userId, duration: duration, size: size });
-			if (!ignorePhrases && lastOne) {
+			if (!ignorePhrases && lastOne && channel) {
 				if (lastOne.changes > 0 && lastOne.lastInsertRowid > -1) {
-					this.checkForNewPhrases({ id: lastOne.lastInsertRowid, startTime: startTime, userId: userId, duration: duration });
+					this.checkForNewPhrases({ id: lastOne.lastInsertRowid, startTime: startTime, userId: userId, duration: duration }, channel, usersListening, false);
 				}
 			}
 		} catch (err) { handleError(err); }
@@ -444,19 +448,19 @@ module.exports = {
 
 				//Get files in the folder
 				let totalDurationFiles = 0;
-				fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, outFiles) => {
-					let files = [];
-					//Delete unwanted files from this list in Windows
-					if (process.platform === "win32") {
-						while (file = outFiles.shift()) {
-							if (['.ini'].indexOf(path.extname(file).toLowerCase()) == -1)
-								files.push(file);
-						}
-					}
-					else
-						files = outFiles;
+				fs.readdir(path.resolve(__dirname, config.folders.VoiceRecording), (err, files) => {
+					//let files = [];
+					////Delete unwanted files from this list in Windows
+					//if (process.platform === "win32") {
+					//	while (file = outFiles.shift()) {
+					//		if (['.ini'].indexOf(path.extname(file).toLowerCase()) == -1)
+					//			files.push(file);
+					//	}
+					//}
+					//else
+					//	files = outFiles;
 
-					if (dbRecordsCount == files.length) {
+					if (dbRecordsCount == files.length || dbRecordsCount+1 == files.length) {
 						//Sum up all durations
 						for (i in files) {
 							let parsed = utils.parseRecFilename(files[i]);
@@ -619,7 +623,11 @@ module.exports = {
 			}
 			//mode: { how: 'phrase', minDuration:3000, allowedGap:300, gapToAdd:100 } - search for a phrase that is longer than minDuration and has pauses between files less than allowedGap ms
 			else if (mode.how == 'phrase') {
-				//Get min and max phrase id for this user
+				if (config.PhraseSourceUsersCountOnChannel > 0) {
+					additionalCondition += " AND usersListening >=$usersListening";
+					usersDict['usersListening'] = config.PhraseSourceUsersCountOnChannel;
+				}
+				//Get random phrase
 				let minMax = db.prepare('SELECT cast(userId AS text) AS userId, idStart, recs FROM phrases WHERE duration>=$duration ' + additionalCondition + ' ORDER BY random() LIMIT 1').get(Object.assign({}, { duration: mode.minDuration }, usersDict));
 				if (minMax) {
 					output['author'] = minMax.userId;
@@ -797,15 +805,31 @@ module.exports = {
 		`userId`	INTEGER,
 		`time`	INTEGER,
 		`channel`	INTEGER,
-		`action`	INTEGER                     */
+		`action`	INTEGER,
+		`resultUsersChannCount`	INTEGER                     */
 
 	// Actions: 0 - Joined, 1 - Left, 2 - Switched
 
 	//Add activity record
-	AddUserActivity: function (UserId, channelId, action) {
+	AddUserActivity: function (UserId, channelId, action, resultUsersChannCount) {
 		try {
-			db.prepare('INSERT INTO "user_activity_log" (userId, time, channel, action) VALUES ($userId, $time, $channel, $action)').run({ userId: UserId, time: Date.now(), channel: channelId, action: action });
+			db.prepare('INSERT INTO "user_activity_log" (userId, time, channel, action, resultUsersChannCount) VALUES ($userId, $time, $channel, $action, $resultUsersChannCount)').run({ userId: UserId, time: Date.now(), channel: channelId, action: action, resultUsersChannCount: resultUsersChannCount });
 		} catch (err) { handleError(err); }
+	},
+
+	//Get users count on the channel at a time
+	GetUserCountAtTimePrepare: function () { GetUserCountAtTimeSqlStmt = db.prepare('SELECT resultUsersChannCount FROM user_activity_log WHERE channel=$channelId AND `time`<=$time ORDER BY `time` DESC LIMIT 1'); },
+	GetUserCountAtTime: function (channelId, time) {
+		try {
+			let result = GetUserCountAtTimeSqlStmt.get({ channelId: channelId, time: time });
+			if (result)
+				return result.resultUsersChannCount;
+			else
+				return 0;
+		} catch (err) {
+			handleError(err);
+			return 0;
+		}
 	},
 
 	//Return information about user's presence on the channel at the given time
@@ -859,13 +883,15 @@ module.exports = {
 		`idStart`	INTEGER,
 		`recs`	INTEGER,
 		`timeStart`	INTEGER,
-		`duration`	INTEGER                     */
+		`duration`	INTEGER
+		`usersListening`	INTEGER
+		`channel`	INTEGER           */
 
 	//Add a phrase to DB
-	addPhrasePrepare: function () { addPhraseSqlStmt = db.prepare('INSERT INTO "phrases" (userId, idStart, recs, timeStart, duration) VALUES ($userId, $idStart, $recs, $timeStart, $duration)'); },
-	addPhrase: function (userId, idStart, recs, timeStart, duration) {
+	addPhrasePrepare: function () { addPhraseSqlStmt = db.prepare('INSERT INTO "phrases" (userId, idStart, recs, timeStart, duration, usersListening, channel) VALUES ($userId, $idStart, $recs, $timeStart, $duration, $usersListening, $channel)'); },
+	addPhrase: function (userId, idStart, recs, timeStart, duration, usersListening, channel) {
 		try {
-			addPhraseSqlStmt.run({ userId: userId, idStart: idStart, recs: recs, timeStart: timeStart, duration: duration });
+			addPhraseSqlStmt.run({ userId: userId, idStart: idStart, recs: recs, timeStart: timeStart, duration: duration, usersListening: usersListening, channel: channel });
 		} catch (err) { handleError(err); }
 	},
 	//Same as above but with array
@@ -883,7 +909,7 @@ module.exports = {
 	},
 
 	//Process new recording for phrases
-	checkForNewPhrases: function (row, dontAddToDBYet=false) {
+	checkForNewPhrases: function (row, channel, usersListening, dontAddToDBYet=false) {
 		//If there any previous records
 		if (recBuffer[row.userId]) {
 			let duration = 0;
@@ -895,12 +921,12 @@ module.exports = {
 			//if enough time passed and buffer reached needed duration, add it to phrases
 			if (duration >= config.PhraseMsDuration && row.startTime - lastTime > config.PhraseAllowedGapMsTime) {
 				if (dontAddToDBYet) {
-					let toAdd = { userId: row.userId, idStart: recBuffer[row.userId][0].id, recs: recBuffer[row.userId].length, timeStart: recBuffer[row.userId][0].startTime, duration: duration }
+					let toAdd = { userId: row.userId, idStart: recBuffer[row.userId][0].id, recs: recBuffer[row.userId].length, timeStart: recBuffer[row.userId][0].startTime, duration: duration, usersListening: usersListening, channel: channel }
 					phrasesToAddToDBBuffer.push(toAdd);
 					//phrasesToAddToDBBuffer.push({ userId: row.userId, idStart: idStart, recs: recs, timeStart: timeStart, duration: duration });
 				}
 				else
-					this.addPhrase(row.userId, recBuffer[row.userId][0].id, recBuffer[row.userId].length, recBuffer[row.userId][0].startTime, duration);
+					this.addPhrase(row.userId, recBuffer[row.userId][0].id, recBuffer[row.userId].length, recBuffer[row.userId][0].startTime, duration, usersListening, channel);
 				//Reset buffer for this user
 				recBuffer[row.userId] = [];
 				recBuffer[row.userId].push(row);
@@ -932,16 +958,39 @@ module.exports = {
 				let checkCount = 0;
 				let lastReportTime = 0;
 				let phrasesFound = 0;
+				let lastJoinedByBotChannelId = null;
+				let leftBotChannelTime = 0;
+
 				db.prepare('DELETE FROM phrases').run();
 				let rows = db.prepare('SELECT id, startTime, cast(userId AS text) AS userId, duration FROM recordings WHERE `exists`=1 ORDER BY startTime ASC').all();
 
 				if (rows) {
 					for (i in rows) {
 						checkCount++;
-						phrasesFound += this.checkForNewPhrases(rows[i], true);
-						//Add to the database through a transaction if buffer is big enough
-						if (phrasesToAddToDBBuffer.length >= config.DBInsertsPerTransaction) {
-							this.addPhraseObjArray();
+						//Get current channel
+						if (!lastJoinedByBotChannelId || leftBotChannelTime < rows[i].startTime) {
+							lastJoinedByBotChannelId = null;
+							leftBotChannelTime = 0;
+							let joinRes = db.prepare('SELECT cast(channel AS text) AS channel FROM user_activity_log WHERE `time`<=$time AND userId="0" AND ( action="0" OR action="2" ) ORDER BY `time` DESC LIMIT 1').get({ time: rows[i].startTime });
+							if (joinRes) lastJoinedByBotChannelId = joinRes.channel;
+
+							let leftRes = db.prepare('SELECT `time` FROM user_activity_log WHERE `time`>$time AND userId="0" ORDER BY `time` ASC LIMIT 1').get({ time: rows[i].startTime });
+							if (leftRes) leftBotChannelTime = leftRes.time;
+							if (!lastJoinedByBotChannelId) lastJoinedByBotChannelId = "0"; //<= Unknown channel for compitability with the old bot version
+						}
+
+						//If we figured out the channel
+						if (lastJoinedByBotChannelId) {
+							//Get current users count on the channel
+							let userCount = this.GetUserCountAtTime(lastJoinedByBotChannelId, rows[i].startTime);
+							//If we figured out amount of users
+							if (userCount) {
+								phrasesFound += this.checkForNewPhrases(rows[i], lastJoinedByBotChannelId, userCount, true);
+								//Add to the database through a transaction if buffer is big enough
+								if (phrasesToAddToDBBuffer.length >= config.DBInsertsPerTransaction) {
+									this.addPhraseObjArray();
+								}
+							}
 						}
 
 						//Periodically report progress of the scan to the console

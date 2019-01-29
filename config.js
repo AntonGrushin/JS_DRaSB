@@ -101,7 +101,7 @@ module.exports = {
 	AutoJoinTalkingRoom: true,
 
 	//If this amount of members is reached in a voice channel, bot will automatically join it (if AutoJoinTalkingRoom == true)
-	AutoJoinMembersAmount: 2,
+	AutoJoinMembersAmount: 1,
 
 	//Count only human accounts in 'AutoJoinMembersAmount' (ignore bots connected to voice channels)
 	VoiceChannelIgnoreBotsCount: true,
@@ -184,6 +184,11 @@ module.exports = {
 	PhraseMsDuration: 3000,
 	//If gaps between recordings is less than this amount of ms they all will be considered a single 'phrase'
 	PhraseAllowedGapMsTime: 300,
+
+	//Phrase source pool
+	//   When you use a random phrase command bot will only use recording that were made when this (or more) amount of users were on a channel
+	//   You may want to set this limit to avoid having some personal talks in random phrases. Set it to 0 if you want to use all phrases without any limitation
+	PhraseSourceUsersCountOnChannel: 5,
 
 	//Dont add to playback recordings that are less or equal to this duration (milliseconds)
 	IgnoreRecordingDuration: 40,

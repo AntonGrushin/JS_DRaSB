@@ -168,7 +168,7 @@ function breakMessage(message, usedCount = 0, beginMessage="", endMessage="", ba
 		}
 	}
 	else
-		return [message];
+		return [beginMessage + message + endMessage];
 }
 
 //Return voiceChannel from a Member or return current voice channel that bot is on right now
@@ -253,7 +253,7 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 		permission += config.permissions.User.PlayRandomQuote << 15;
 	}
 	let result = (permission & (1 << bit)) > 0;
-	if (!result)
+	if (!result && postMessage)
 		sendInfoMessage("You don't have permission for that! :pensive:", channel ? channel : client.channels.get(config.ReportChannelId), guildmember.user);
 	return result;
 }
@@ -357,7 +357,7 @@ function startRecording(connection) {
 										});
 										//Add to the database
 										let FileProps = fs.statSync(targetFile)
-										db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0, false);
+										db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0, false, connection.channel.id, countChannelMembers(connection.channel));
 									})
 									.output(targetFile)
 									.run();
@@ -473,7 +473,8 @@ function checkForEmptyArguments(args = [], channel = null, author = null) {
 			break;
 		}
 	}
-	sendInfoMessage("You did not specify any arguments in your command!", channel, author);
+	if (noArguments)
+		sendInfoMessage("You did not specify any arguments in your command!", channel, author);
 
 	return noArguments;
 }
@@ -636,7 +637,11 @@ function playQueue(connection) {
 					else if (inputObject.mode.how == 'phrase') {
 						//Get name of that user
 						//let quotedUser = client.guilds.get(config.guildId).members.get()
-						playbackMessage(":speaking_head: Playing quote of <@" + inputObject.searchresult.author + "> `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm z") + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+						let userName = "<@" + inputObject.searchresult.author + ">";
+						let member = client.guilds.get(config.guildId).members.get(inputObject.searchresult.author);
+						if (member)
+							userName = "**"+member.nickname+"**";
+						playbackMessage(":speaking_head: Playing quote of " + userName + " `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm z") + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
 					}
 					//Attach event listeners
 					attachEventsOnPlayback(connection);
@@ -804,7 +809,7 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 		if (!(OldMember.voiceChannelID) && NewMember.voiceChannelID) {
 			let ChannelMembersCount = countChannelMembers(NewMember.voiceChannel);
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " joined '" + NewMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
-			db.AddUserActivity(NewMember.user.id, NewMember.voiceChannel.id, 0);
+			db.AddUserActivity(NewMember.user.id, NewMember.voiceChannel.id, 0, ChannelMembersCount);
 			if (ChannelMembersCount >= config.AutoJoinMembersAmount && config.AutoJoinTalkingRoom) {
 				if (config.logging.ConsoleReport.ChannelMembersCountDebug) utils.report("Members count: There are " + countChannelMembers(NewMember.voiceChannel) + " members in '" + NewMember.voiceChannel.name + "' channel now. (By config we join if >" + config.AutoJoinMembersAmount + ").", 'c', config.logging.LogFileReport.ChannelMembersCountDebug); //debug message
 				if (currConnection && config.SwitchVoiceRoomIfMoreMembers) {
@@ -823,7 +828,7 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 			let ChannelMembersCount = countChannelMembers(OldMember.voiceChannel);
 			let channel = OldMember.voiceChannel;
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " left '" + OldMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
-			db.AddUserActivity(NewMember.user.id, OldMember.voiceChannel.id, 1);
+			db.AddUserActivity(NewMember.user.id, OldMember.voiceChannel.id, 1, ChannelMembersCount);
 			//Leave the channel if its empty
 			if (currConnection) {
 				if (countChannelMembers(currConnection.channel) == 0 && config.AutoLeaveIfAlone) {
@@ -839,7 +844,7 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 		//Member changed a voice channle
 		else if (OldMember.voiceChannelID != NewMember.voiceChannelID && OldMember.voiceChannelID && NewMember.voiceChannelID) {
 			if (config.logging.ConsoleReport.MembersJoinLeaveVoice) utils.report(userName + " switched to '" + NewMember.voiceChannel.name + "' channel!", 'w', config.logging.LogFileReport.MembersJoinLeaveVoice);
-			db.AddUserActivity(NewMember.user.id, NewMember.voiceChannel.id, 2);
+			db.AddUserActivity(NewMember.user.id, NewMember.voiceChannel.id, 2, countChannelMembers(NewMember.voiceChannel));
 			if (currConnection && (config.SwitchVoiceRoomIfMoreMembers || countChannelMembers(currConnection.channel) == 0)) {
 				//Change the channel if it has more members than current one
 				if ((countChannelMembers(NewMember.voiceChannel) > countChannelMembers(currConnection.channel) || countChannelMembers(currConnection.channel) == 0) && NewMember.voiceChannel.id != currConnection.channel.id && NewMember.voiceChannel.joinable)
@@ -895,16 +900,29 @@ client.on('message', async message => {
 						case 'rescan':
 							{
 								if (config.EnableSoundboard && checkPermission(guildMember, 30)) {
-									if (argsLC[0] == "sess" || argsLC[0] == "sessions" || argsLC[0] == "talk" || argsLC[0] == "talks") {
+									if (["sess", "sessions", "talk", "talks"].indexOf(args[0].toLowerCase()) > -1) {
 										sendInfoMessage("Recalcuating talk sessions...", message.channel, message.author);
-										db.calculateTalksList(config.GapForNewTalkSession * 60000, 0, 0, 0, [], true)
-											.then(() => {
-												sendInfoMessage("Recalcuation of talk sessions is done!", message.channel, message.author);
-											});
+										setTimeout(() => {
+											db.calculateTalksList(config.GapForNewTalkSession * 60000, 0, 0, 0, [], true)
+												.then(() => {
+													sendInfoMessage("Recalcuation of talk sessions is done!", message.channel, message.author);
+												});
+										}, 200);
+									}
+									else if (["phrases", "phrase", "quotes"].indexOf(args[0].toLowerCase()) > -1) {
+										sendInfoMessage("Recalcuating phrases", message.channel, message.author);
+										setTimeout(() => {
+											db.scanForPhrases()
+												.then((err) => {
+													sendInfoMessage("Recalcuation of phrases is done!", message.channel, message.author);
+												});
+										}, 200);
 									}
 									else {
-										sendInfoMessage("Scanning files...", message.channel, message.author);
-										db.scanSoundsFolder();
+										sendInfoMessage("Scanning sound files...", message.channel, message.author);
+										setTimeout(() => {
+											db.scanSoundsFolder();
+										}, 200);
 									}
 								}
 								break;
@@ -1148,12 +1166,13 @@ client.on('message', async message => {
 						case 'recordings':
 							{
 								let talkList = db.getTalksList();
-								let begin = "__There are " + talkList.talks + " talk sessions with total recorded voice duration of " + utils.humanTime(talkList.totalDuration / 1000) + ":__" + (argsLC[0] != "all" ? " Showing last sessions. To see all use `" + config.CommandCharacter + "talks all` command" : "") + "\n";
+								let allFlag = args.length ? args[0].toLowerCase() == "all" : false;
+								let begin = "__There are " + talkList.talks + " talk sessions with total recorded voice duration of " + utils.humanTime(talkList.totalDuration / 1000) + ":__" + (!allFlag ? " Showing last sessions. To see all use `" + config.CommandCharacter + "talks all` command" : "") + "\n";
 								let messageToSend = "";
 								for (i in talkList.result)
 									messageToSend += talkList.result[i] + "\n";
 								let footer = "**Duration** is covered time of the session, **Playback** is total voice duration.";
-								if (args[0].toLowerCase() == "all") {
+								if (allFlag) {
 									let msgs = breakMessage(messageToSend, footer.length + begin.length, "", "");
 									sendInfoMessage("List of all sessions may be too long, therefore it's sent in private!", message.channel);
 									for (i in msgs)
@@ -1578,6 +1597,9 @@ process.on('uncaughtException', function (exception) {
 process.stdin.resume();
 function handleExitEvent() {
 	utils.report("Recieved requested to stop the application, cleaning up...", 'y');
+	let connection = getCurrentVoiceConnection();
+	if (connection)
+		stopPlayback(connection, false);
 	client.destroy();
 	db.shutdown();
 	process.exit();
