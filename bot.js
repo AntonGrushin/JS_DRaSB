@@ -22,6 +22,7 @@ const path = require('path');
 const https = require('https');
 const client = new Discord.Client();
 //var heapdump = require('heapdump');
+const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
 
 //Load bot parts
 const config = require('./config.js');
@@ -40,6 +41,9 @@ var PlayingQueue = [];
 var PausingThePlayback = false;
 var CurrentPlayingSound = {};
 var CurrentVolume = 0.0;
+var queueDBWrite = [];
+var lastQueueElements = [];
+var ffmpegPlaybackCommands = [];
 
 var soundIsPlaying = false;
 var PreparingToPlaySound = false;
@@ -57,7 +61,7 @@ function getUserTagName(user) {
 	}
 }
 
-//Get the name of the User if he is part of the guild or false if he is not
+//Get the name of the User or return false if he is not part of the guild
 function getUserName(User) {
 	let member = client.guilds.get(config.guildId).members.get(User.id);
 	if (member) {
@@ -66,9 +70,8 @@ function getUserName(User) {
 		else
 			return User.username;
 	}
-	else {
+	else  
 		return false;
-	}
 }
 
 //Get total duration of the queue
@@ -225,6 +228,7 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 	//PlayRecordsIfWasOnTheChannel	13
 	//PlayAnyonesRecords:			14
 	//PlayRandomQuote				15
+	//RepeatLastPlayback			16
 
 	//If he is admin
 	if (config.permissions.AdminsList.indexOf(guildmember.user.id) > -1)
@@ -251,6 +255,7 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 		permission += config.permissions.User.PlayRecordsIfWasOnTheChannel << 13;
 		permission += config.permissions.User.PlayAnyonesRecords << 14;
 		permission += config.permissions.User.PlayRandomQuote << 15;
+		permission += config.permissions.User.RepeatLastPlayback << 16;
 	}
 	let result = (permission & (1 << bit)) > 0;
 	if (!result && postMessage)
@@ -278,6 +283,48 @@ function getCurrentVoiceConnection() {
 		return client.voiceConnections.array()[0];
 	else
 		return null;
+}
+
+//Write stats to database
+function writeQueueToDB() {
+	if (queueDBWrite.length > 0) {
+		let dbTransaction = db.getDB().transaction(() => {
+			while (queueDBWrite.length > 0) {
+				let element = queueDBWrite.shift();
+
+				if (element.function == 'userPlayedSoundsInc') {
+					db.userPlayedSoundsInc(element.argument);
+				}
+				else if (element.function == 'soundPlayedInc') {
+					db.soundPlayedInc(element.argument);
+				}
+				else if (element.function == 'userPlayedRecsInc') {
+					db.userPlayedRecsInc(element.argument);
+				}
+				else if (element.function == 'userPlayedYoutubeInc') {
+					db.userPlayedYoutubeInc(element.argument);
+				}
+			}
+		});
+		dbTransaction();
+	}
+}
+
+function deletePlaybackCommands() {
+	for (i in ffmpegPlaybackCommands) {
+		if (process.platform === "linux")
+			ffmpegPlaybackCommands[i].kill('SIGSTOP');
+		//If command is not stopped within 5 seconds, force to kill the process
+		setTimeout(() => {
+			if (ffmpegPlaybackCommands[i]) {
+				if (process.platform === "linux")
+					try {
+						ffmpegPlaybackCommands[i].kill();
+						delete ffmpegPlaybackCommands[i];
+					} catch (err) { }
+			}
+		}, 100);
+	}
 }
 
 // =============== SOUND FUNCTIONS ===============
@@ -356,8 +403,12 @@ function startRecording(connection) {
 											if (err) utils.report("Couldn't delete temp file '" + outTempFile + "'. Error: " + err, 'r');
 										});
 										//Add to the database
-										let FileProps = fs.statSync(targetFile)
-										db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, FileProps ? FileProps.size : 0, false, connection.channel.id, countChannelMembers(connection.channel));
+										fs.stat(targetFile, (err, stats) => {
+											if (!err)
+												db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, stats.size, false, connection.channel.id, countChannelMembers(connection.channel));
+											else
+												utils.report("Couldn't read file property of '" + targetFile + "'. Error: " + err, 'r');
+										});
 									})
 									.output(targetFile)
 									.run();
@@ -526,6 +577,198 @@ function volumeIterate(dispatcher, itLeft, waitperiod, volumeChange, volumeNow) 
 	}
 }
 
+//What to do when fdmpeg stream is ready to be executed
+function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode = { how: 'concat' }) {
+	let effects = {};
+	if ('effects' in inputObject.flags)
+		effects = inputObject.flags.effects;
+
+	let command = utils.buildFfmpegCommand(inputList, effects, mode, config.ComplexFiltersAmountLimit);
+	if (command) {
+		command = command.audioChannels(2).audioFrequency(48000);
+
+		//If we have start time
+		let startTime = utils.get(inputObject, 'flags.start');
+		if (startTime)
+			command = command.seek(startTime);
+
+		//If we have duration
+		let duration = utils.get(inputObject, 'flags.duration');
+
+		//if we have end time
+		let endTime = utils.get(inputObject, 'flags.end');
+		if (endTime) {
+			let diff = endTime - (startTime ? startTime : 0);
+			duration = diff > 0 ? diff : null;
+		}
+
+		if (duration)
+			command = command.duration(duration);
+
+		//command
+		//	.on('error', function (err) {
+		//		utils.report("ffmpeg reported " + err, 'r');
+		//		if (ffstream) {
+		//			ffstream.destroy();
+		//			//global.gc();
+		//		}
+
+		//		if (process.platform === "linux")
+		//			command.kill('SIGSTOP'); //This does not work on Windows
+		//		//command.kill();
+		//	})
+		//.on('end', function (stdout, stderr) {
+		//	//if (stream)
+		//	//	stream.close();
+		//	//if (ffstream)
+		//	//	ffstream.end();
+		//})
+		//.on('progress', function (progress) {
+		//	console.log('Processing: ' + Math.round(progress.percent) / 100 + '% done (' + progress.timemark + ') ' + progress.targetSize + ' Kb');
+		//})
+
+
+		//Redirect to an output
+		let target = utils.get(inputObject, 'flags.target');
+		if (target) {
+			PreparingToPlaySound = false;
+			//Remove command character from the beginning if we have it
+			if (target.substring(0, config.CommandCharacter.length) == config.CommandCharacter)
+				target = target.substring(config.CommandCharacter.length);
+
+			//Check for unwanted characters in the string and remove them
+			target = target.replace(/[/\\?%*:|"<> ]/g, '');
+
+			//Add a number in the end if file exists already
+			target = utils.incrementFilename(target + '.' + config.ConvertUploadedAudioContainer, config.folders.Sounds);
+
+			if (target) {
+				let tempFile = path.resolve(__dirname, config.folders.Temp, target);
+				let targetFile = path.resolve(__dirname, config.folders.Sounds, target);
+				command = command
+					.audioCodec(config.ConvertUploadedAudioCodec)
+					.audioBitrate(config.ConvertUploadedAudioBitrate)
+					.output(tempFile)
+					.on('end', function (stdout, stderr) {
+						//Move file to Sounds dir
+						utils.moveFile(tempFile, targetFile)
+							.then(() => {
+								utils.checkAudioFormat(targetFile)
+									.then(resultNew => {
+										fs.stat(targetFile, (err, stats) => {
+											if (!err) {
+												let transaction = db.getDB().transaction(() => {
+													db.userUploadedSoundsInc(inputObject.user.id); //Increment value in DB for statistics
+													db.soundUpdateAdd(path.parse(targetFile).name + path.parse(targetFile).ext, resultNew['metadata']['format']['duration'], fs.statSync(targetFile).size, resultNew['metadata']['format']['bitrate'], inputObject.user.id);
+												});
+												transaction();
+												sendInfoMessage("File saved! Now you can play it using **" + config.CommandCharacter + path.parse(targetFile).name.toLowerCase() + "** command.", client.channels.get(config.ReportChannelId), inputObject.user.user);
+												if (inputObject.type == 'file') {
+													utils.report(getUserName(inputObject.user.user) + " resaved file '" + inputObject.filename + "' with duration of " + resultNew['metadata']['format']['duration'] + " seconds as a command '" + path.parse(targetFile).name.toLowerCase() + "'.", 'm');
+												}
+												else if (inputObject.type == 'recording' && inputObject.mode.how == 'phrase') {
+													utils.report(getUserName(inputObject.user.user) + " saved quote said by '" + db.getUserGuildName(inputObject.searchresult.author) + "' at " + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm z") + " with duration of " + resultNew['metadata']['format']['duration'] + " seconds as a command '" + path.parse(targetFile).name.toLowerCase() + "'.", 'm');
+												}
+												else if (inputObject.type == 'youtube') {
+													utils.report(getUserName(inputObject.user.user) + " saved YouTube '" + inputObject.title.substring(0, config.YoutubeTitleLengthLimit) + "' (" + inputObject.link + ") with result duration of " + resultNew['metadata']['format']['duration'] + " seconds as a command '" + path.parse(targetFile).name.toLowerCase() + "'.", 'm');
+												}
+											}
+											else {
+												utils.report("Couldn't read file property of '" + targetFile + "'. Error: " + err, 'r');
+												sendInfoMessage("Something went wrong while processing the file :pensive: ", client.channels.get(config.ReportChannelId), inputObject.user.user);
+											}
+										});
+										
+									});
+								//db.scanSoundsFolder();
+							})
+							.catch(err => {
+								sendInfoMessage("There was an error while performing file move! Operation was not finished.", client.channels.get(config.ReportChannelId), inputObject.user.user);
+								utils.report("Couldn't move file '" + tempFile + "' to '" + targetFile + "'. Check permissions or disk space.", 'r');
+							});
+					})
+					.on('start', function (commandLine) {
+						if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+						sendInfoMessage("Started processing... Please, wait (this may take a while).", client.channels.get(config.ReportChannelId), inputObject.user.user);
+						//ffmpegPlaybackCommands.push(command);
+					})
+					.on('error', function (err) {
+						utils.report("ffmpeg reported " + err, 'r');
+
+						if (process.platform === "linux")
+							command.kill('SIGSTOP'); //This does not work on Windows
+						//command.kill();
+					})
+					.run();
+			}
+			else {
+				sendInfoMessage("Can't execute it! (Bad filename?)", client.channels.get(config.ReportChannelId), inputObject.user.user);
+			}
+		}
+		//Play on current channel
+		else {
+
+			function checkHang(timeout, iterationsToCheck = 100) {
+				if (iterationsToCheck > 0) {
+					console.log(utils.msCount("CheckHang"));
+					setTimeout(() => {
+						checkHang(timeout, iterationsToCheck - 1);
+					}, timeout);
+				}
+				else
+					utils.msCount("CheckHang", 'reset');
+			}
+
+			const ffstream = new PassThrough();
+			command
+				.on('start', function (commandLine) {
+					//checkHang(20, 200);
+					if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+					ffmpegPlaybackCommands.push(command);
+				})
+				.on('error', function (err) {
+					utils.report("ffmpeg reported " + err, 'r');
+					if (ffstream) {
+						ffstream.destroy();
+						//global.gc();
+					}
+
+					if (process.platform === "linux")
+						command.kill('SIGSTOP'); //This does not work on Windows
+					//command.kill();
+				})
+				.format('s16le').pipe(ffstream);
+
+			connection.playConvertedStream(ffstream, PlaybackOptions);
+			//Attach event listeners
+			attachEventsOnPlayback(connection);
+
+			//Report information
+			if (inputObject.type == 'file') {
+				playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+			}
+			else if (inputObject.type == 'recording') {
+				if ((inputObject.chunkIndex == 1 || !inputObject.chunkIndex) && inputObject.mode.how == 'sequence')
+					playbackMessage(":record_button: Playing recording of `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm") + " - " + utils.getDateFormatted(inputObject.limits.end, "HH:mm z") + "` period" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(inputObject.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+				else if (inputObject.mode.how == 'phrase') {
+					//Get name of that user
+					//let quotedUser = client.guilds.get(config.guildId).members.get()
+					let userName = "<@" + inputObject.searchresult.author + ">";
+					let guildUserName = db.getUserGuildName(inputObject.searchresult.author);
+					if (guildUserName)
+						userName = "**" + guildUserName + "**";
+					playbackMessage(":speaking_head: Playing quote of " + userName + " `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm z") + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(inputObject.duration / 1000) + ". Requested by " + getUserTagName(inputObject.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
+				}
+			}
+			else if (inputObject.type == 'youtube') {
+				playbackMessage(":musical_note: Playing Youtube `" + inputObject.title.substring(0, config.YoutubeTitleLengthLimit) + "`" + utils.flagsToString(inputObject.flags) + " (duration " + utils.humanTime(inputObject.duration) + "). Requested by " + getUserTagName(inputObject.user) + ". <" + inputObject.link + ">");
+			}
+		}
+	}
+	else
+		utils.report("There was an error: empty input list for ffmpeg command.", 'r');
+}
+
 //Add sound to the playing queue
 function addToQueue(soundToPlay, method = 'append') {
 	//Append to the end of the queue
@@ -547,10 +790,11 @@ function attachEventsOnPlayback(connection) {
 		soundIsPlaying = false;
 		handleQueue(reason);
 		LastPlaybackTime = Date.now();
-		//Recreate player in 1 second if nothing else is playing
+		//Recreate player in 1 second if nothing else is playing and write stats to DB
 		setTimeout(() => {
 			if (!soundIsPlaying && !PreparingToPlaySound) {
 				recreatePlayer();
+				writeQueueToDB();
 			}
 		}, 1000);
 	});
@@ -593,24 +837,30 @@ function playQueue(connection) {
 				if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("soundIsPlaying PASSED", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
 				//Get next sound from the queue
 				let inputObject = PlayingQueue.shift();
+				let PlaybackOptions = {};
+				//If it does not have a target, remember this command in the history
+				if (!utils.get(inputObject, 'flags.target'))
+					addHistoryPlaybackElement(inputObject);
+				
 				if (inputObject.type == 'file') {
 					if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("inputObject.type PASSED", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
 					CurrentPlayingSound = { 'type': 'file', 'path': path.resolve(__dirname, config.folders.Sounds, inputObject.filename), 'filename': inputObject.filename, 'duration': inputObject.duration, 'user': inputObject.user, 'flags': inputObject.flags };
 					if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
 					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
-					let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
+					PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
-					db.userPlayedSoundsInc(inputObject.user.id); //Increment value in DB for statistics
-					db.soundPlayedInc(inputObject.filename); //Increment value in DB for statistics
-					let ffstream = utils.processStream([{ file: path.resolve(__dirname, config.folders.Sounds, inputObject.filename) } ], inputObject.flags);
-					connection.playConvertedStream(ffstream, PlaybackOptions);
+					queueDBWrite.push({ function: 'userPlayedSoundsInc', argument: inputObject.user.id });
+					queueDBWrite.push({ function: 'soundPlayedInc', argument: inputObject.filename });
+					//db.userPlayedSoundsInc(inputObject.user.id); //Increment value in DB for statistics
+					//db.soundPlayedInc(inputObject.filename); //Increment value in DB for statistics
 
-					playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
-					//Attach event listeners
-					attachEventsOnPlayback(connection);
-				} //QueueElement = { 'type': 'recording', 'searchresult': found, 'user': guildMember, 'flags': additionalFlags };
+					//let ffstream = utils.processStream([{ file: path.resolve(__dirname, config.folders.Sounds, inputObject.filename) }], inputObject.flags, utils.get(inputObject, 'flags.target'));
+					//connection.playConvertedStream(ffstream, PlaybackOptions);
+					executeFFMPEG(connection, PlaybackOptions, inputObject, [{ file: path.resolve(__dirname, config.folders.Sounds, inputObject.filename) }]);
+				}
+				//QueueElement = { 'type': 'recording', 'searchresult': found, 'user': guildMember, 'flags': additionalFlags };
 				else if (inputObject.type == 'recording') {
 					if (inputObject.chunks) {
 						//If its not the last chunk, add next one to the queue
@@ -625,47 +875,30 @@ function playQueue(connection) {
 					CurrentPlayingSound = { 'type': 'recording', 'searchresult': inputObject.searchresult, 'duration': inputObject.duration, 'user': inputObject.user, 'flags': inputObject.flags };
 					
 					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
-					let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
+					PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 					
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
-					db.userPlayedRecsInc(inputObject.user.id); //Increment value in DB for statistics
-					let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
-					connection.playConvertedStream(ffstream, PlaybackOptions); 
-					if ((inputObject.chunkIndex == 1 || !inputObject.chunkIndex) && inputObject.mode.how == 'sequence')
-						playbackMessage(":record_button: Playing recording of `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm") + " - " + utils.getDateFormatted(inputObject.limits.end, "HH:mm z") + "` period" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
-					else if (inputObject.mode.how == 'phrase') {
-						//Get name of that user
-						//let quotedUser = client.guilds.get(config.guildId).members.get()
-						let userName = "<@" + inputObject.searchresult.author + ">";
-						let member = client.guilds.get(config.guildId).members.get(inputObject.searchresult.author);
-						if (member)
-							userName = "**"+member.nickname+"**";
-						playbackMessage(":speaking_head: Playing quote of " + userName + " `" + utils.getDateFormatted(inputObject.limits.start, "D MMM YYYY, HH:mm z") + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration / 1000) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
-					}
-					//Attach event listeners
-					attachEventsOnPlayback(connection);
-
-					//TEMP
-					//PreparingToPlaySound = false;
-					//soundIsPlaying = false;
-					//handleQueue("next");
-					//LastPlaybackTime = Date.now();
+					queueDBWrite.push({ function: 'userPlayedRecsInc', argument: inputObject.user.id });
+					//db.userPlayedRecsInc(inputObject.user.id); //Increment value in DB for statistics
+					//let ffstream = utils.processStream(inputObject.searchresult.list, inputObject.flags, utils.get(inputObject, 'flags.target'), { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
+					//connection.playConvertedStream(ffstream, PlaybackOptions); 
+					executeFFMPEG(connection, PlaybackOptions, inputObject, inputObject.searchresult.list, { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
 				}
 				else if (inputObject.type == 'youtube') {
 					let YtOptions = { quality: 'highestaudio' };
 					let recievedInfo = false;
+					let YTinfo = {};
 					if (config.UseAudioOnlyFilterForYoutube) YtOptions['filter'] = 'audioonly';
 					//'begin' parameter should be greather than 6 seconds: https://github.com/fent/node-ytdl-core/issues/129
 					// sometimes its not working
 					if (inputObject.played && inputObject.played > 7000 && !config.UseAudioOnlyFilterForYoutube) YtOptions['begin'] = Math.floor(inputObject.played / 1000) + "s";
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " creating stream... for '" + inputObject["link"]+"'", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 
-					db.userPlayedYoutubeInc(inputObject.user.id); //Increment value in DB for statistics
+					queueDBWrite.push({ function: 'userPlayedYoutubeInc', argument: inputObject.user.id });
+					//db.userPlayedYoutubeInc(inputObject.user.id); //Increment value in DB for statistics
 
 					//Create the stream
-					console.log(inputObject["link"]);
-					console.log(YtOptions);
 					let stream = ytdl(inputObject["link"], YtOptions)
 					stream.on('info', (videoInfo, videoFormat) => {
 						if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Recieved YouTube info message, creating dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
@@ -674,7 +907,7 @@ function playQueue(connection) {
 						CurrentPlayingSound.duration = videoInfo['length_seconds'];
 						if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
 						CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
-						let PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
+						PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 						if (inputObject.played && config.UseAudioOnlyFilterForYoutube) {
 							if (inputObject.played / 1000 <= config.YoutubeResumeTimeLimit)
 								PlaybackOptions['seek'] = inputObject.played / 1000;
@@ -682,12 +915,9 @@ function playQueue(connection) {
 								PlaybackOptions['seek'] = config.YoutubeResumeTimeLimit;
 						}
 
-						let ffstream = utils.processStream([{ file: stream }], inputObject.flags);
-						connection.playConvertedStream(ffstream, PlaybackOptions);
-						
-						playbackMessage(":musical_note: Playing Youtube `" + CurrentPlayingSound.title.substring(0, config.YoutubeTitleLengthLimit) + "`" + utils.flagsToString(inputObject.flags) + " (duration " + utils.humanTime(CurrentPlayingSound.duration) + "). Requested by " + getUserTagName(CurrentPlayingSound.user) + ". <" + CurrentPlayingSound.link + ">");
-						//Attach event listeners
-						attachEventsOnPlayback(connection);
+						//let ffstream = utils.processStream([{ file: stream }], inputObject.flags, utils.get(inputObject, 'flags.target'));
+						//connection.playConvertedStream(ffstream, PlaybackOptions);
+						executeFFMPEG(connection, PlaybackOptions, CurrentPlayingSound, [{ file: stream }]);
 						recievedInfo = true;
 					});
 					stream.on('error', error => {
@@ -722,10 +952,14 @@ function stopPlayback(connection, checkForLongDuration = false, newFileDurationS
 	//Stop it, but add to the queue to play later from same position
 	if (checkForLongDuration && CurrentPlayingSound) {
 		let nowPlaying = CurrentPlayingSound;
-		if (nowPlaying.type == 'file' && config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration && (newFileDurationSec>0 && newFileDurationSec < config.LongSoundDuration)) {
+		if (nowPlaying.type == 'file' && config.EnablePausingOfLongSounds && CurrentPlayingSound.duration >= config.LongSoundDuration && (newFileDurationSec > 0 && newFileDurationSec < config.LongSoundDuration)) {
 			nowPlaying['played'] = CurrentPlayingSound.played ? connection.dispatcher.time + CurrentPlayingSound.played : connection.dispatcher.time;
-			//End the dispatcher
+			
 			PlayingQueue.unshift(nowPlaying);
+		}
+		else if (nowPlaying.type == 'recording' && PlayingQueue[0] && !checkForLongDuration) {
+			if (PlayingQueue[0].chunkIndex)
+				PlayingQueue.shift();
 		}
 	}
 	//End the playback
@@ -737,7 +971,13 @@ function stopPlayback(connection, checkForLongDuration = false, newFileDurationS
 		//connection.dispatcher.end();
 	}
 	//Kill all ffmpeg Playback processes
-	utils.deletePlaybackCommands();
+	deletePlaybackCommands();
+}
+
+function addHistoryPlaybackElement(element) {
+	lastQueueElements.unshift(element);
+	if (lastQueueElements.length > config.PlaybackHistoryLastSize)
+		lastQueueElements.pop();
 }
 
 //Check if we need to launch next sound in the queue
@@ -1058,6 +1298,57 @@ client.on('message', async message => {
 								}
 								break;
 							}
+						//Play last element
+						case 'last':
+						case 'repeat':
+						case 'again':
+							{
+								if (config.EnableSoundboard) {
+									if (checkPermission(guildMember, 16, message.channel)) {
+										prepareForPlaybackOnChannel(guildMember)
+											.then((connection) => {
+												if (connection) {
+													if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+													let QueueElement = null;
+													if (!isNaN(args[0])) {
+														let index = Number(args[0]) > config.PlaybackHistoryLastSize ? config.PlaybackHistoryLastSize : Number(args[0]) < 1 ? 0 : Number(args[0]) - 1;
+														if (lastQueueElements.length > 0 && lastQueueElements.length >= index + 1)
+															QueueElement = lastQueueElements.splice(index)[0];
+														else
+															sendInfoMessage("Nothing found!", message.channel, message.author);
+													}
+													else {
+														if (lastQueueElements.length > 0)
+															QueueElement = lastQueueElements.shift();
+														else
+															sendInfoMessage("History is empty!", message.channel, message.author);
+													}
+													if (QueueElement) {
+														QueueElement.user = guildMember;
+														//Replace flags with new ones
+														for (var key in additionalFlags) if (additionalFlags[key] && additionalFlags[key] != NaN) QueueElement.flags[key] = additionalFlags[key];
+														//If something is playing right now
+														if (soundIsPlaying) {
+															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+															//Stop or pause the playback (depending on length of playing sound)
+															stopPlayback(connection, true);
+															//Add to the front position in queue
+															PlayingQueue.unshift(QueueElement);
+															//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+														}
+														//Nothing is playing right now
+														else {
+															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+															PlayingQueue.unshift(QueueElement);
+															handleQueue('repeatRequest');
+														}
+													}
+												}
+											});
+									}
+								}
+								break;
+							}
 						//Pause the playback
 						case 'pause':
 						case 'hold':
@@ -1188,7 +1479,6 @@ client.on('message', async message => {
 						//Play recording
 						case 'rec':
                         case 'playrec':
-                        case 'repeat':
 						case 'quote':
 						case 'r':
 						case 'random':
@@ -1405,7 +1695,7 @@ client.on('message', async message => {
 																
 																//Create Queue element
 																QueueElement = { 'type': 'file', 'filename': found.sound.filenameFull, 'user': guildMember, 'duration': found.sound.duration, 'flags': additionalFlags };
-
+																
 																//If something is playing right now
 																if (soundIsPlaying) {
 																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Stopping playback!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
@@ -1600,9 +1890,12 @@ function handleExitEvent() {
 	let connection = getCurrentVoiceConnection();
 	if (connection)
 		stopPlayback(connection, false);
+	writeQueueToDB()
 	client.destroy();
 	db.shutdown();
-	process.exit();
+	setTimeout(() => {
+		process.exit();
+	}, 500);
 };
 
 process.on('SIGINT', handleExitEvent); //ctrl+c event

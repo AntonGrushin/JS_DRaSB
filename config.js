@@ -123,6 +123,9 @@ module.exports = {
 	//Wait this amount of ms before playing next sound (if we play sounds too fast, some members of voice channel may not hear them)
 	SoundPlaybackWaitTimeMs: 5,
 
+	//'last' comman history size. How many of recordings to keep in 'last' command history
+	PlaybackHistoryLastSize: 10,
+
 	//How many times to send the voice packet to reduce packet loss
 	VoicePacketPasses: 2,
 
@@ -241,7 +244,8 @@ module.exports = {
 			SummonBot: true,
 			DismissBot: true,
             PlayFiles: true,
-            PlayYoutubeLinks: true,
+			PlayYoutubeLinks: true,
+			RepeatLastPlayback: true,
 			UploadLocalAudioFiles: true,
 			RenameLocalAudioFiles: true,
 			DeleteLocalAudioFiles: false,

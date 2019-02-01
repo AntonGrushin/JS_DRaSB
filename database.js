@@ -58,6 +58,11 @@ module.exports = {
 		db.close();
 	},
 
+	//Get bd connection
+	getDB: function () {
+		return db;
+	},
+
 	//Create all tables or make sure they exist
 	prepareDatabase: function (reportStats = true) {
 		return new Promise((resolve, reject) => {
@@ -199,7 +204,8 @@ module.exports = {
 	getUserPlayedSounds: function (userid) { let row; try { row = db.prepare("SELECT playedSounds from users WHERE userid = $userid").get({ userid: userid }); } catch (err) { handleError(err); } if (row) return row.playedSounds; else return 0; },
 	getUserPlayedYoutube: function (userid) { let row; try { row = db.prepare("SELECT playedYoutube from users WHERE userid = $userid").get({ userid: userid }); } catch (err) { handleError(err); } if (row) return row.playedYoutube; else return 0; },
 	getUserUploadedSounds: function (userid) { let row; try { row = db.prepare("SELECT uploadedSounds from users WHERE userid = $userid").get({ userid: userid }); } catch (err) { handleError(err); } if (row) return row.uploadedSounds; else return 0; },
-	
+	getUserGuildName: function (userid) { let row; try { row = db.prepare("SELECT guildName from users WHERE userid = $userid").get({ userid: userid }); } catch (err) { handleError(err); } if (row) return row.guildName; else return userid; },
+
 	// =========== SOUNDS ===========
 	/* DB structure
 		`filenameFull`	TEXT UNIQUE,
