@@ -316,8 +316,8 @@ module.exports = {
 		let nameNoNumber = newName;
 		let numSearch = newName.match(/([^\r\n\t\f\v])([0-9]+)/);
 		if (numSearch) {
-			nameNoNumber = volResult[1];
-			incNumber = Number(volResult[2]);
+			nameNoNumber = numSearch[1];
+			incNumber = Number(numSearch[2]);
 		}
 		while (fs.existsSync(path.resolve(__dirname, targetPath, newName + pathParse.ext))) {
 			tryCount++

@@ -272,6 +272,8 @@ module.exports = {
 	},
 
 	setSoundVolume: function (filename, value) { try { db.prepare('UPDATE `sounds` SET volume = $value WHERE filenameFull = $filenameFull').run({ filenameFull: filename, value: value }); } catch (err) { handleError(err); } },
+	renameSound: function (filenameFull, filenameFullNew, filename, extension) { try { db.prepare('UPDATE `sounds` SET filenameFull = $filenameFullNew, filename=$filename, extension=$extension WHERE filenameFull = $filenameFull').run({ filenameFull: filenameFull, filenameFullNew: filenameFullNew, filename: filename, extension: extension }); } catch (err) { handleError(err); } },
+	deleteSound: function (filename) { try { db.prepare('DELETE FROM `sounds` WHERE filenameFull = $filenameFull').run({ filenameFull: filename }); } catch (err) { handleError(err); } },
 	soundPlayedInc: function (filename) { try { db.prepare('UPDATE `sounds` SET playedCount = playedCount+1, lastTimePlayed=$lastTimePlayed WHERE filenameFull = $filenameFull').run({ filenameFull: filename, lastTimePlayed: Date.now() }); } catch (err) { handleError(err); } },
 
 	//Return filename array of a sound by full or partial search request

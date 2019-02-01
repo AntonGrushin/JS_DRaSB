@@ -229,6 +229,8 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 	//PlayAnyonesRecords:			14
 	//PlayRandomQuote				15
 	//RepeatLastPlayback			16
+	//DeleteOwnLocalAudioFiles		17
+	//RenameOwnLocalAudioFiles		18
 
 	//If he is admin
 	if (config.permissions.AdminsList.indexOf(guildmember.user.id) > -1)
@@ -256,6 +258,8 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 		permission += config.permissions.User.PlayAnyonesRecords << 14;
 		permission += config.permissions.User.PlayRandomQuote << 15;
 		permission += config.permissions.User.RepeatLastPlayback << 16;
+		permission += config.permissions.User.DeleteOwnLocalAudioFiles << 17;
+		permission += config.permissions.User.RenameOwnLocalAudioFiles << 18;
 	}
 	let result = (permission & (1 << bit)) > 0;
 	if (!result && postMessage)
@@ -1249,6 +1253,85 @@ client.on('message', async message => {
 									}
 									else
 										sendInfoMessage("Join a voice channel first!", message.channel, message.author);
+								}
+								break;
+							}
+						//Delete or rename a sound
+						case 'delete':
+						case 'del':
+						case 'rename':
+						case 'ren':
+						case 'remove':
+							{
+								if (config.EnableSoundboard) {
+									if (checkForEmptyArguments(args, message.channel, message.author)) return;
+
+									db.findSound(args[0])
+										.then(found => {
+											if (found.count == 1) {
+												let RenameLocalAudioFiles = checkPermission(guildMember, 10, message.channel, false);
+												let DeleteLocalAudioFiles = checkPermission(guildMember, 5, message.channel, false);
+												let DeleteOwnLocalAudioFiles = checkPermission(guildMember, 17, message.channel, false);
+												let RenameOwnLocalAudioFiles = checkPermission(guildMember, 18, message.channel, false);
+												let ownCommand = found.sound.uploadedBy == message.author.id;
+												//Rename a command
+												if (command == 'rename' || command == 'ren') {
+													if (!args[1]) {
+														sendInfoMessage("You didn't specify second argument. \nTo rename a command you need to use two arguments: `" + config.CommandCharacter + "rename old_command new_command`", message.channel, message.author);
+														return;
+													}
+													if (!ownCommand && RenameOwnLocalAudioFiles && !RenameLocalAudioFiles) {
+														sendInfoMessage("You did not upload this command and therefore have no permission to rename it.", message.channel, message.author);
+														return;
+													}
+													else if (!RenameOwnLocalAudioFiles && !RenameLocalAudioFiles) {
+														sendInfoMessage("You have no permission to rename commands.", message.channel, message.author);
+														return;
+													}
+													let newName = utils.sanitizeFilename(args[1]);
+
+													if (RenameLocalAudioFiles || (RenameOwnLocalAudioFiles && ownCommand)) {
+														utils.moveFile(path.resolve(__dirname, config.folders.Sounds, found.sound.filenameFull), path.resolve(__dirname, config.folders.Sounds, newName + found.sound.extension), false)
+															.then(() => {
+																db.renameSound(found.sound.filenameFull, newName + found.sound.extension, newName, found.sound.extension);
+																sendInfoMessage("Successfully renamed command `" + found.sound.filename + "` into `" + newName + "`.", message.channel, message.author);
+															})
+															.catch(err => {
+																utils.report("Couldn't rename file '" + path.resolve(__dirname, config.folders.Sounds, found.sound.filenameFull) + "' into '" + path.resolve(__dirname, config.folders.Sounds, newName + found.sound.extension) + "'. " + err, 'r');
+																sendInfoMessage("There was an error while performing file rename operation.", message.channel, message.author);
+															});
+													}
+												}
+												//Delete a command
+												else {
+													if (!ownCommand && DeleteOwnLocalAudioFiles && !DeleteLocalAudioFiles) {
+														sendInfoMessage("You did not upload this command and therefore have no permission to delete it.", message.channel, message.author);
+														return;
+													}
+													else if (!DeleteOwnLocalAudioFiles && !DeleteLocalAudioFiles) {
+														sendInfoMessage("You have no permission to delete commands.", message.channel, message.author);
+														return;
+													}
+
+													if (DeleteLocalAudioFiles || (ownCommand && DeleteOwnLocalAudioFiles)) {
+														let newFilename = utils.incrementFilename(found.sound.filenameFull, config.folders.DeletedSounds);
+														utils.moveFile(path.resolve(__dirname, config.folders.Sounds, found.sound.filenameFull), path.resolve(__dirname, config.folders.DeletedSounds, newFilename), false)
+															.then(() => {
+																db.deleteSound(found.sound.filenameFull);
+																sendInfoMessage("Successfully deleted command `" + found.sound.filename + "`.", message.channel, message.author);
+															})
+															.catch(err => {
+																utils.report("Couldn't rename file '" + path.resolve(__dirname, config.folders.Sounds, found.sound.filenameFull) + "' into '" + path.resolve(__dirname, config.folders.Sounds, newName + found.sound.extension) + "'. " + err, 'r');
+																sendInfoMessage("There was an error while deleting file.", message.channel, message.author);
+															});
+													}
+												}
+											}
+											else if (found.count>1)
+												sendInfoMessage("More than one result is found. Please, type a full command.", message.channel, message.author);
+											else
+												sendInfoMessage("Nothing was found. Type `" + config.CommandCharacter + "list` to see full list of avaliable commands.", message.channel, message.author);
+										});
 								}
 								break;
 							}

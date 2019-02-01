@@ -248,7 +248,9 @@ module.exports = {
 			RepeatLastPlayback: true,
 			UploadLocalAudioFiles: true,
 			RenameLocalAudioFiles: true,
+			RenameOwnLocalAudioFiles: true,
 			DeleteLocalAudioFiles: false,
+			DeleteOwnLocalAudioFiles: true,
 			RecieveListOfLocalAudios: true,
 			PauseResumeSkipPlayback: true,
 			RejoinChannel: true,
@@ -272,7 +274,9 @@ module.exports = {
 		//Folder where we store uploaded soundfiles for soundboard
 		Sounds: 'sounds',
 		//Folder for Impulse Response filters
-		SoundFilters: 'soundfilters' 
+		SoundFilters: 'soundfilters',
+		//Folder for deleted from soundboard sounds
+		DeletedSounds: 'deleted'
 	},
 
 
