@@ -8,7 +8,7 @@
  *  DRaSB is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 3.
  *  
- *  JS_DRaSB Copyright 2018 - Anton Grushin
+ *  JS_DRaSB Copyright 2018-2019 - Anton Grushin
  *      
  *
  *        utils.js
@@ -16,11 +16,15 @@
  *********************************************************************/
 
 const fs = require('fs');
-const config = require('./config.js');
+//const config = require('./config.js');
+
 const path = require('path');
 const mkdirp = require('mkdirp');
 const ffmpeg = require('fluent-ffmpeg');
 const moment = require("moment-timezone");
+//Config
+var opt = require('./opt.js');
+var config = opt.opt;
 
 //technical
 var timings = {};

@@ -8,7 +8,7 @@
  *  DRaSB is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 3.
  *
- *  JS_DRaSB Copyright 2018 - Anton Grushin
+ *  JS_DRaSB Copyright 2018-2019 - Anton Grushin
  *
  *
  *        bot.js
@@ -25,9 +25,12 @@ const client = new Discord.Client();
 const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
 
 //Load bot parts
-const config = require('./config.js');
+//const config = require('./config.js');
 const utils = require('./utils.js');
 var db = require('./database.js');
+//Config
+var opt = require('./opt.js');
+var config = opt.opt;
 
 //Classes from DiscordJs for refreshing
 const AudioPlayer = require('discord.js/src/client/voice/player/AudioPlayer');
@@ -360,71 +363,64 @@ function startRecording(connection) {
 					let chunkCount = 0;
 					let totalStreamSize = 0;
 					let fileTimeNow = utils.fileTimeNow();
+					let tempfile = path.resolve(__dirname, config.folders.Temp, fileTimeNow + '_' + utils.sanitizeFilename(user.username));
+					const writable = fs.createWriteStream(tempfile + '.pcm');
 
 					audioStream.on('data', (chunk) => {
 						chunkCount++;
 						totalStreamSize += chunk.length;
 					});
+					//Write the data to the temp file
+					audioStream.pipe(writable);
+
 					audioStream.on('end', () => {
 						//Each chunk is 20 ms
 						let durationMs = chunkCount * 20;
 						if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("Got " + chunkCount + " chunks with total size of " + totalStreamSize + " bytes from user '" + getUserName(user) + "'.", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
-					});
 
-					let outTempFile = path.resolve(__dirname, config.folders.Temp, fileTimeNow.file + '_' + user.id + '_' + utils.sanitizeFilename(getUserName(user)) + '.' + config.RecordingAudioContainer);
-					//let outTargetFile = 
-					let outputStream = fs.createWriteStream(outTempFile);
-					let FFcommand = ffmpeg(audioStream)
-						.noVideo()
-						.inputOptions([
-							'-f', 's16le',
-							'-ac', '2',
-							'-ar', '48000'
-						])
-						.audioCodec(config.RecordingAudioCodec)
-						.audioBitrate(config.RecordingAudioBitrate)
-						.outputOption('-f', config.RecordingAudioContainer)
-						.on('error', function (err) {
-							utils.report("ffmpeg reported error: " + err, 'r')
-							outputStream.close();
-						})
-						.on('end', function (stdout, stderr) {
-							let durationMs = chunkCount * 20;
-							//If duration is too small, do not save this file
-							if (durationMs <= config.RecordingsDurationSkipThresholdMs) {
-								fs.unlink(outTempFile, err => {
-									if (err) utils.report("Couldn't delete temp file '" + outTempFile + "'. Error: " + err, 'r');
-								});
-							}
-							else {
-								let targetFile = path.resolve(__dirname, config.folders.VoiceRecording, fileTimeNow.file + '_' + user.id + '_' + durationMs + '_' + utils.sanitizeFilename(getUserName(user)) + '.' + config.RecordingAudioContainer);
-								if (config.logging.ConsoleReport.RecFilesSavedAndProcessed) utils.report("Saved recording of '" + user.username + "' with duration of " + durationMs + " ms (" + chunkCount + " chunks).", 'c', config.logging.LogFileReport.RecFilesSavedAndProcessed);
-								//Remux the file without encoding, so it has 'duration' metadata
-								ffmpeg(outTempFile)
-									.audioCodec('copy')
-									.on('end', (stdout, stderr) => {
-										fs.unlink(outTempFile, err => {
-											if (err) utils.report("Couldn't delete temp file '" + outTempFile + "'. Error: " + err, 'r');
-										});
-										//Add to the database
-										fs.stat(targetFile, (err, stats) => {
-											if (!err)
-												db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, stats.size, false, connection.channel.id, countChannelMembers(connection.channel));
-											else
-												utils.report("Couldn't read file property of '" + targetFile + "'. Error: " + err, 'r');
-										});
-									})
-									.output(targetFile)
-									.run();
-							}
-						})
-						.on('codecData', format => {
-							if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
-						})
-						.on('start', function (commandLine) {
-							//if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
-						})
-						.pipe(outputStream);
+						if (durationMs > config.RecordingsDurationSkipThresholdMs) {
+							//let outputFile = path.resolve(__dirname, config.folders.VoiceRecording, fileTimeNow + '_' + utils.cutFillString(user.id, 20) + '_' + utils.cutFillString(durationMs, 10, '0') + '_' + utils.sanitizeFilename(getUserName(user)) + '.' + config.RecordingAudioContainer)
+							let targetFile = path.resolve(__dirname, config.folders.VoiceRecording, fileTimeNow.file + '_' + user.id + '_' + durationMs + '_' + utils.sanitizeFilename(getUserName(user)) + '.' + config.RecordingAudioContainer);
+							let FFcommand = ffmpeg(tempfile + '.pcm', { niceness: 20 })
+								.noVideo()
+								.inputOptions([
+									'-f', 's16le',
+									'-ac', '2',
+									'-ar', '48000'
+								])
+								.audioCodec(config.RecordingAudioCodec)
+								.audioBitrate(config.RecordingAudioBitrate)
+								.on('error', function (err) {
+									utils.report("ffmpeg reported error: " + err, 'r')
+								})
+								.on('end', function (stdout, stderr) {
+									if (config.logging.ConsoleReport.RecFilesSavedAndProcessed) utils.report("Saved recording of '" + user.username + "' with duration of " + durationMs + " ms (" + chunkCount + " chunks).", 'c', config.logging.LogFileReport.RecFilesSavedAndProcessed);
+									fs.unlink(tempfile + '.pcm', err => {
+										if (err) utils.report("Couldn't delete temp file '" + tempfile + "'. Error: " + err, 'r');
+									});
+									//Add to the database
+									fs.stat(targetFile, (err, stats) => {
+										if (!err)
+											db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, stats.size, false, connection.channel.id, countChannelMembers(connection.channel));
+										else
+											utils.report("Couldn't read file property of '" + targetFile + "'. Error: " + err, 'r');
+									});
+								})
+								.on('codecData', format => {
+									if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
+								})
+								.on('start', function (commandLine) {
+									//if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+								})
+								.output(targetFile)
+								.run();
+						}
+						else
+							fs.unlink(tempfile + '.pcm', err => {
+								if (err) utils.report("Couldn't delete temp file '" + tempfile + "'. Error: " + err, 'r');
+							});
+					});
+					
 				}
 			})
 			connection.on('error', (err) => utils.report("There was an error in voice connection: " + err, 'r'));
@@ -479,7 +475,7 @@ function joinVoiceChannel(channel) {
 function joinVoiceChannelQueue(channel) {
 	return new Promise((resolve, reject) => {
 		//if channel exists
-		if (channel.name) {
+		if (channel.name && channel.joinable) {
 
 			//If there is a channel in the queue, just reset the variable, command is queued, so dont run it again
 			if (ChannelWaitingToJoin) {
@@ -516,6 +512,8 @@ function joinVoiceChannelQueue(channel) {
 				}
 			}
 		}
+		else
+			return reject("No permission to join the channel.");
 	});
 }
 
@@ -1000,14 +998,15 @@ function handleQueue(reason) {
 		PausingThePlayback = false;
 }
 
-if (config.debug.ShowMemoryUsed)
-	utils.memoryStatShow(config.debug.ShowMemoryUsedPeriodMs);
 
 // =============== CLIENT EVENTS ===============
 
 client.on('ready', () => {
 	utils.report('Logged in as ' + client.user.tag + '!', 'g');
-	db.updateUsersDB(client.guilds.get(config.guildId).members);
+	if (config.guildId && config.ReportChannelId)
+		db.updateUsersDB(client.guilds.get(config.guildId).members);
+	else
+		utils.report("Looks like 'guildId' and 'ReportChannelId' options are not set. To set them, please edit config.js file or type '"+config.CommandCharacter+"register' on the report channel of your server.\nBot will not function untill you do this. Waiting for command...", 'y');
 	BotReady = true;
 });
 /*client.on('debug', (message) => {
@@ -1026,6 +1025,7 @@ client.on('warn', error => utils.report("Warning: " + error, 'y'));
 
 //Renew guild members on join and update (otherwise we have old names and non-existant members in client.guilds)
 client.on('guildMemberAdd', member => {
+	if (!config.guildId || !config.ReportChannelId) return;
 	client.guilds.get(config.guildId).fetchMember(member.id)
 		.then(() => {
 			if (config.logging.ConsoleReport.MembersJoiningUpdating) utils.report("New Member joined: '" + member.user.username + "' (" + member.id + ")!", 'b', config.logging.LogFileReport.MembersJoiningUpdating);
@@ -1034,6 +1034,7 @@ client.on('guildMemberAdd', member => {
 		.catch(error => utils.report("Couldn't fetch a new member '" + member.user.username +"'. Error: " + error, 'r'));
 });
 client.on('guildMemberUpdate', (OldMember, NewMember) => {
+	if (!config.guildId || !config.ReportChannelId) return;
 	client.guilds.get(config.guildId).fetchMember(NewMember.id)
 		.then(() => {
 			if (config.logging.ConsoleReport.MembersJoiningUpdating) utils.report("Member updated: '" + NewMember.user.username + "' (" + NewMember.id + ")!", 'b', config.logging.LogFileReport.MembersJoiningUpdating);
@@ -1044,6 +1045,7 @@ client.on('guildMemberUpdate', (OldMember, NewMember) => {
 
 //Check if bot should move to this channel or leave it if required amount of members in there is reached
 client.on('voiceStateUpdate', (OldMember, NewMember) => {
+	if (!config.guildId || !config.ReportChannelId) return;
 	//react only to our guild events
 	if (NewMember.guild.id == config.guildId || OldMember.guild.id == config.guildId) {
 		let userName = getUserName(NewMember.user)
@@ -1101,26 +1103,90 @@ client.on('voiceStateUpdate', (OldMember, NewMember) => {
 	}
 });
 
-//Login if everything is ready
+//Start DB and read config options
 if (utils.checkFoldersExistance()) {
 	db.prepareDatabase()
 		.then(() => {
-			db.scanSoundsFolder()
-				.then(() => {
-					db.checkRecordingsScanNeeded()
-						.then(err => {
-							if (!err)
-								RecordsDBReady = true;
-							client.login(config.token);
-						});
-				});
-		})
-		.catch(err => { utils.report("There was an error while preparing the database: "+err, 'r'); });
+			db.readOptionsFromDB();
+			opt.readOptionsFromConfig();
 
+			checkCiticalConfigValues();
+				
+		})
+		.catch(err => { utils.report("There was an error while preparing the database: " + err, 'r'); });
+
+}
+//Check if critical options are set
+function checkCiticalConfigValues() {
+	if (config.token)
+		mainStart();
+	else {
+		let tokenIsSet = false;
+		const readline = require('readline');
+		const rl = readline.createInterface({
+			input: process.stdin,
+			output: process.stdout
+		});
+
+		function askForToken() {
+			return new Promise((resolve, reject) => {
+				rl.question('\n\nTThere is no token record in config.js file. Please, either set it in config.js or paste it here.\nWhat is the bot token?\n', (answer) => {
+					if (answer.length > 5) {
+						db.writeOption('token', answer.trim());
+						rl.close();
+						return resolve(false);
+					}
+					else {
+						console.log("Token is too short! Try again.");
+						askForToken()
+							.then(err => {
+								return resolve(err);
+							});
+						
+					}
+
+				});
+			});
+		}
+
+		askForToken()
+			.then(err => {
+				rl.close();
+				mainStart();
+			});
+		
+	}
+}
+//Start bot if everything is ready
+function mainStart() {
+	db.scanSoundsFolder()
+		.then(() => {
+			db.checkRecordingsScanNeeded()
+				.then(err => {
+					if (!err)
+						RecordsDBReady = true;
+					client.login(config.token);
+				});
+		});
+}
+
+//Register on a server or change report channel
+function registerGuildChannel(guildId, channelId, userId) {
+	db.writeOption('guildId', guildId);
+	db.writeOption('ReportChannelId', channelId);
+	db.updateUsersDB(client.guilds.get(config.guildId).members);
+	utils.report("Registering guildId: " + guildId + ", ReportChannelId: " + channelId + "!", 'g');
 }
 
 // =============== MESSAGE EVENTS ===============
 client.on('message', async message => {
+	//If guild was not registered yet
+	if (!config.guildId || !config.ReportChannelId) {
+		if (message.content == config.CommandCharacter + "register") {
+			registerGuildChannel(message.guild.id, message.channel.id, message.author.id);
+		}
+		return;
+	}
 	let userName = getUserName(message.author)
 	let guildMember = message.channel.type != "text" ? client.guilds.get(config.guildId).members.get(message.author.id) : message.member;
 	let currVoiceConnection = getCurrentVoiceConnection();
@@ -1168,6 +1234,14 @@ client.on('message', async message => {
 											db.scanSoundsFolder();
 										}, 200);
 									}
+								}
+								break;
+							}
+						case 'register':
+							{
+								if (checkPermission(guildMember, 30)) {
+									registerGuildChannel(message.guild.id, message.channel.id, message.author.id);
+									sendInfoMessage("Registring new ReportChannelId!", message.channel, message.author);
 								}
 								break;
 							}

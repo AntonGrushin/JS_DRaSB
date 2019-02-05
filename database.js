@@ -8,7 +8,7 @@
  *  DRaSB is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 3.
  *
- *  JS_DRaSB Copyright 2018 - Anton Grushin
+ *  JS_DRaSB Copyright 2018-2019 - Anton Grushin
  *
  *
  *        database.js
@@ -16,7 +16,7 @@
  *    to remember different values in .json files in 'database' folder.
  *********************************************************************/
 const fs = require('fs');
-const config = require('./config.js');
+//const config = require('./config.js');
 const path = require('path');
 const utils = require('./utils.js');
 const ffmpeg = require('fluent-ffmpeg');
@@ -26,6 +26,10 @@ const async = require("async");
 //var db = new sqlite3.Database(':memory:');
 const Database = require('better-sqlite3');
 const db = new Database('sqlite.db', { memory: false });
+
+//Config
+var opt = require('./opt.js');
+var config = opt.opt;
 
 //Private variables
 var usersVolume = {};
@@ -53,7 +57,27 @@ function handleError(error) {
 
 module.exports = {
 
-	//Clean up function on progra exit
+	//Read options from DB
+	readOptionsFromDB: function () {
+		try {
+			let rows = db.prepare("SELECT * FROM `settings`").all();
+			for (i in rows) {
+				opt.set(rows[i].name, rows[i].valueInt ? Number(rows[i].valueInt) : rows[i].valueText);
+			}
+		} catch (err) { handleError(err); }
+	},
+
+	//Write options in DB
+	writeOption: function (name, value) {
+		try {
+			let thisIsString = (typeof value == "string");
+			db.prepare('INSERT INTO `settings` (`name`, ' + (thisIsString ? 'valueText' : 'valueInt') + ') VALUES ($name, $value) ON CONFLICT(`name`) DO UPDATE SET ' + (thisIsString ? 'valueText = $value, valueInt = null' : 'valueInt = $value, valueText = null')).run({ name: name, value: value });
+			//Set config value
+			opt.set(name, value);
+		} catch (err) { handleError(err); }
+	},
+
+	//Clean up function on program exit
 	shutdown: function () {
 		db.close();
 	},
@@ -68,9 +92,9 @@ module.exports = {
 		return new Promise((resolve, reject) => {
 
 			//Tables
-			let CreatePermissionsDB = db.prepare('CREATE TABLE IF NOT EXISTS `permissions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `UserOrRole_Id` INTEGER, `thisIsUser` INTEGER DEFAULT 0, `permissions` INTEGER )');
+			//let CreatePermissionsDB = db.prepare('CREATE TABLE IF NOT EXISTS `permissions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `UserOrRole_Id` INTEGER, `thisIsUser` INTEGER DEFAULT 0, `permissions` INTEGER )');
 			let CreateRecordingsDB = db.prepare('CREATE TABLE IF NOT EXISTS "recordings" ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `filename` TEXT UNIQUE, `startTime` INTEGER, `userId` INTEGER, `duration` INTEGER DEFAULT 0, `size` INTEGER, `exists` INTEGER DEFAULT 1, `hidden` INTEGER DEFAULT 0 )');
-			let CreateSettingsDB = db.prepare('CREATE TABLE IF NOT EXISTS `settings` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `guildId` INTEGER, `enableSB` INTEGER, `enableRec` INTEGER, `ReportChannelId` INTEGER )');
+			let CreateSettingsDB = db.prepare('CREATE TABLE IF NOT EXISTS `settings` ( `name` TEXT UNIQUE, `valueText` TEXT, `valueInt` INTEGER, PRIMARY KEY(`name`) )');
 			let CreateSoundsDB = db.prepare('CREATE TABLE IF NOT EXISTS "sounds" ( `filenameFull` TEXT UNIQUE, `filename` TEXT, `extension` TEXT, `volume` REAL DEFAULT 100, `duration` REAL DEFAULT 0, `size` INTEGER DEFAULT 0, `bitrate` INTEGER DEFAULT 0, `playedCount` INTEGER DEFAULT 0, `uploadedBy` INTEGER DEFAULT 0, `uploadDate` INTEGER, `lastTimePlayed` INTEGER, `exists` INTEGER DEFAULT 1, PRIMARY KEY(`filenameFull`) )');
 			let CreateUsersDB = db.prepare('CREATE TABLE IF NOT EXISTS "users" ( `userid` INTEGER UNIQUE, `name` TEXT, `guildName` TEXT, `volume` REAL DEFAULT 20.0, `playedSounds` INTEGER DEFAULT 0, `playedYoutube` INTEGER DEFAULT 0, `playedRecordings` INTEGER DEFAULT 0, `lastCommand` INTEGER, `lastRecording` INTEGER, `recDuration` INTEGER DEFAULT 0, `recFilesCount` INTEGER DEFAULT 0, `uploadedSounds` INTEGER DEFAULT 0, PRIMARY KEY(`userid`) )');
 			let CreateTalkSessionsDB = db.prepare('CREATE TABLE IF NOT EXISTS `talk_sessions` ( `id` INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, `startTime` INTEGER, `endTime` INTEGER, `duration` INTEGER, `usersCount` INTEGER, `usersList` TEXT, `count` INTEGER )');
@@ -80,7 +104,7 @@ module.exports = {
 			try {
 				//Execute DB creation
 				let createDBResult = db.transaction(() => {
-					CreatePermissionsDB.run();
+					//CreatePermissionsDB.run();
 					CreateRecordingsDB.run();
 					CreateSettingsDB.run();
 					CreateSoundsDB.run();
@@ -92,14 +116,14 @@ module.exports = {
 				createDBResult();
 
 				//Indexes
-				let CreatePermissionsIdx = db.prepare('CREATE INDEX IF NOT EXISTS `permissions_Id` ON `permissions` ( `UserOrRole_Id` )');
+				//let CreatePermissionsIdx = db.prepare('CREATE INDEX IF NOT EXISTS `permissions_Id` ON `permissions` ( `UserOrRole_Id` )');
 				let CreateRecIdx = db.prepare('CREATE INDEX IF NOT EXISTS `rec_startTime_idx` ON `recordings` ( `startTime` )');
 				let CreateSoundsIdx = db.prepare('CREATE INDEX IF NOT EXISTS `sounds_filename_idx` ON `sounds` ( `filename` )');
 				let CreateActivityIdx = db.prepare('CREATE INDEX IF NOT EXISTS `user_activity_idx` ON `user_activity_log`(`time` ASC, `channel`)');
 
 				//Execute Indexes creation
 				let createIdxResult = db.transaction(() => {
-					CreatePermissionsIdx.run();
+					//CreatePermissionsIdx.run();
 					CreateRecIdx.run();
 					CreateSoundsIdx.run();
 					CreateActivityIdx.run();
@@ -260,6 +284,18 @@ module.exports = {
 							});
 					}, () => {
 						scanSoundsFolderDBTransaction(dataToInsert);
+						//Read the DB into memory for faster access
+						soundsDB = {};
+						let allSounds = this.getSoundsList(true);
+						for (s in allSounds) {
+							if (!soundsDB[allSounds[s].filename]) soundsDB[allSounds[s].filename] = {};
+							soundsDB[allSounds[s].filename]['extension'] = allSounds[s].extension;
+							soundsDB[allSounds[s].filename]['duration'] = allSounds[s].duration;
+							//soundsDB[allSounds[s].filename]['filenameFull'] = allSounds[s].filenameFull;
+							//soundsDB[allSounds[s].filename]['size'] = allSounds[s].size;
+							//soundsDB[allSounds[s].filename]['bitrate'] = allSounds[s].bitrate;
+							soundsDB[allSounds[s].filename]['volume'] = allSounds[s].volume;
+						}
 						utils.report("Found " + checkCount + " sound files, Database updated!", 'g');
 						return resolve();
 					});
@@ -271,8 +307,14 @@ module.exports = {
 		});
 	},
 
-	setSoundVolume: function (filename, value) { try { db.prepare('UPDATE `sounds` SET volume = $value WHERE filenameFull = $filenameFull').run({ filenameFull: filename, value: value }); } catch (err) { handleError(err); } },
-	renameSound: function (filenameFull, filenameFullNew, filename, extension) { try { db.prepare('UPDATE `sounds` SET filenameFull = $filenameFullNew, filename=$filename, extension=$extension WHERE filenameFull = $filenameFull').run({ filenameFull: filenameFull, filenameFullNew: filenameFullNew, filename: filename, extension: extension }); } catch (err) { handleError(err); } },
+	setSoundVolume: function (filename, value) {
+		try { db.prepare('UPDATE `sounds` SET volume = $value WHERE filenameFull = $filenameFull').run({ filenameFull: filename, value: value }); } catch (err) { handleError(err); }
+		if (soundsDB[path.parse(filename).name])
+			soundsDB[path.parse(filename).name].volume = value;
+	},
+	renameSound: function (filenameFull, filenameFullNew, filename, extension) {
+		try { db.prepare('UPDATE `sounds` SET filenameFull = $filenameFullNew, filename=$filename, extension=$extension WHERE filenameFull = $filenameFull').run({ filenameFull: filenameFull, filenameFullNew: filenameFullNew, filename: filename, extension: extension }); } catch (err) { handleError(err); }
+	},
 	deleteSound: function (filename) { try { db.prepare('DELETE FROM `sounds` WHERE filenameFull = $filenameFull').run({ filenameFull: filename }); } catch (err) { handleError(err); } },
 	soundPlayedInc: function (filename) { try { db.prepare('UPDATE `sounds` SET playedCount = playedCount+1, lastTimePlayed=$lastTimePlayed WHERE filenameFull = $filenameFull').run({ filenameFull: filename, lastTimePlayed: Date.now() }); } catch (err) { handleError(err); } },
 
@@ -307,11 +349,11 @@ module.exports = {
 	},
 
 	//Return list of all sounds in DB
-	getSoundsList: function () {
+	getSoundsList: function (all=false) {
 		return new Promise((resolve, reject) => {
 			let result = [];
 			try {
-				let rows = db.prepare("SELECT filename FROM sounds WHERE `exists`=1 ORDER BY filename ASC").all();
+				let rows = db.prepare("SELECT filename" + (all ? ", filenameFull, extension, volume, duration, `size`, bitrate" : "")+" FROM sounds WHERE `exists`=1 ORDER BY filename ASC").all();
 				if (rows) {
 					rows.forEach(row => {
 						result.push(row.filename);

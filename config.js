@@ -8,7 +8,7 @@
  *  DRaSB is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 3.
  *
- *  JS_DRaSB Copyright 2018 - Anton Grushin
+ *  JS_DRaSB Copyright 2018-2019 - Anton Grushin
  *
  *
  *        config.js
@@ -17,13 +17,13 @@
  *********************************************************************/
 module.exports = {
 
-	// ======== MAIN OPTIONS (SET THEM BEFORE USING THE BOT!) ========
+	// ======== MAIN OPTIONS ========
 
 	//Discord bot token
-	token: "aaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbccccccccccccccccccccc0000000000000",
+	token: "Paste_your_token_here",
 
 	//ID of the server where you want this bot to function
-	guildId: "000000000000000000",
+	guildId: "",
 
 	//Enable soundboard features
 	EnableSoundboard: true,
@@ -32,7 +32,7 @@ module.exports = {
 	EnableRecording: true,
 
 	//Command channel ID also being used as channel where bot will send informational and playback status messages
-	ReportChannelId: "000000000000000000",
+	ReportChannelId: "",
 
 
 
