@@ -363,7 +363,7 @@ function startRecording(connection) {
 					let chunkCount = 0;
 					let totalStreamSize = 0;
 					let fileTimeNow = utils.fileTimeNow();
-					let tempfile = path.resolve(__dirname, config.folders.Temp, fileTimeNow + '_' + utils.sanitizeFilename(user.username));
+					let tempfile = path.resolve(__dirname, config.folders.Temp, fileTimeNow.file + '_' + utils.sanitizeFilename(user.username));
 					const writable = fs.createWriteStream(tempfile + '.pcm');
 
 					audioStream.on('data', (chunk) => {
