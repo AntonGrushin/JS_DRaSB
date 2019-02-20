@@ -311,26 +311,12 @@ function writeQueueToDB() {
 				else if (element.function == 'userPlayedYoutubeInc') {
 					db.userPlayedYoutubeInc(element.argument);
 				}
+				else if (element.function == 'recordingAdd') {
+					db.recordingAdd(element.argument.target, element.argument.time, element.argument.duration, element.argument.userid, element.argument.filesize, element.argument.ignorePhrase, element.argument.channel, element.argument.usersListening );
+				}
 			}
 		});
 		dbTransaction();
-	}
-}
-
-function deletePlaybackCommands() {
-	for (i in ffmpegPlaybackCommands) {
-		if (process.platform === "linux")
-			ffmpegPlaybackCommands[i].kill('SIGSTOP');
-		//If command is not stopped within 5 seconds, force to kill the process
-		setTimeout(() => {
-			if (ffmpegPlaybackCommands[i]) {
-				if (process.platform === "linux")
-					try {
-						ffmpegPlaybackCommands[i].kill();
-						delete ffmpegPlaybackCommands[i];
-					} catch (err) { }
-			}
-		}, 100);
 	}
 }
 
@@ -400,8 +386,10 @@ function startRecording(connection) {
 									});
 									//Add to the database
 									fs.stat(targetFile, (err, stats) => {
-										if (!err)
-											db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, stats.size, false, connection.channel.id, countChannelMembers(connection.channel));
+										if (!err) {
+											//db.recordingAdd(targetFile, fileTimeNow.now.getTime(), durationMs, user.id, stats.size, false, connection.channel.id, countChannelMembers(connection.channel));
+											queueDBWrite.push({ function: 'recordingAdd', argument: { target: targetFile, time: fileTimeNow.now.getTime(), duration: durationMs, userid: user.id, filesize: stats.size, ignorePhrase: false, channel: connection.channel.id, usersListening: countChannelMembers(connection.channel) } });
+										}
 										else
 											utils.report("Couldn't read file property of '" + targetFile + "'. Error: " + err, 'r');
 									});
@@ -581,73 +569,18 @@ function volumeIterate(dispatcher, itLeft, waitperiod, volumeChange, volumeNow) 
 
 //What to do when fdmpeg stream is ready to be executed
 function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode = { how: 'concat' }) {
-	let effects = {};
-	if ('effects' in inputObject.flags)
-		effects = inputObject.flags.effects;
-
-	let command = utils.buildFfmpegCommand(inputList, effects, mode, config.ComplexFiltersAmountLimit);
-	if (command) {
-		command = command.audioChannels(2).audioFrequency(48000);
-
-		//If we have start time
-		let startTime = utils.get(inputObject, 'flags.start');
-		if (startTime)
-			command = command.seek(startTime);
-
-		//If we have duration
-		let duration = utils.get(inputObject, 'flags.duration');
-
-		//if we have end time
-		let endTime = utils.get(inputObject, 'flags.end');
-		if (endTime) {
-			let diff = endTime - (startTime ? startTime : 0);
-			duration = diff > 0 ? diff : null;
-		}
-
-		if (duration)
-			command = command.duration(duration);
-
-		//command
-		//	.on('error', function (err) {
-		//		utils.report("ffmpeg reported " + err, 'r');
-		//		if (ffstream) {
-		//			ffstream.destroy();
-		//			//global.gc();
-		//		}
-
-		//		if (process.platform === "linux")
-		//			command.kill('SIGSTOP'); //This does not work on Windows
-		//		//command.kill();
-		//	})
-		//.on('end', function (stdout, stderr) {
-		//	//if (stream)
-		//	//	stream.close();
-		//	//if (ffstream)
-		//	//	ffstream.end();
-		//})
-		//.on('progress', function (progress) {
-		//	console.log('Processing: ' + Math.round(progress.percent) / 100 + '% done (' + progress.timemark + ') ' + progress.targetSize + ' Kb');
-		//})
-
-
+	const processed = utils.processStream(inputObject, inputList, mode);
+	if (processed) {
 		//Redirect to an output
 		let target = utils.get(inputObject, 'flags.target');
 		if (target) {
 			PreparingToPlaySound = false;
-			//Remove command character from the beginning if we have it
-			if (target.substring(0, config.CommandCharacter.length) == config.CommandCharacter)
-				target = target.substring(config.CommandCharacter.length);
-
-			//Check for unwanted characters in the string and remove them
-			target = target.replace(/[/\\?%*:|"<> ]/g, '');
-
-			//Add a number in the end if file exists already
-			target = utils.incrementFilename(target + '.' + config.ConvertUploadedAudioContainer, config.folders.Sounds);
+			target = utils.targetFileCheck(inputObject);
 
 			if (target) {
 				let tempFile = path.resolve(__dirname, config.folders.Temp, target);
 				let targetFile = path.resolve(__dirname, config.folders.Sounds, target);
-				command = command
+				processed
 					.audioCodec(config.ConvertUploadedAudioCodec)
 					.audioBitrate(config.ConvertUploadedAudioBitrate)
 					.output(tempFile)
@@ -680,7 +613,7 @@ function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode
 												sendInfoMessage("Something went wrong while processing the file :pensive: ", client.channels.get(config.ReportChannelId), inputObject.user.user);
 											}
 										});
-										
+
 									});
 								//db.scanSoundsFolder();
 							})
@@ -698,7 +631,7 @@ function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode
 						utils.report("ffmpeg reported " + err, 'r');
 
 						if (process.platform === "linux")
-							command.kill('SIGSTOP'); //This does not work on Windows
+							processed.kill('SIGSTOP'); //This does not work on Windows
 						//command.kill();
 					})
 					.run();
@@ -709,42 +642,10 @@ function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode
 		}
 		//Play on current channel
 		else {
-
-			function checkHang(timeout, iterationsToCheck = 100) {
-				if (iterationsToCheck > 0) {
-					console.log(utils.msCount("CheckHang"));
-					setTimeout(() => {
-						checkHang(timeout, iterationsToCheck - 1);
-					}, timeout);
-				}
-				else
-					utils.msCount("CheckHang", 'reset');
-			}
-
-			const ffstream = new PassThrough();
-			command
-				.on('start', function (commandLine) {
-					//checkHang(20, 200);
-					if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
-					ffmpegPlaybackCommands.push(command);
-				})
-				.on('error', function (err) {
-					utils.report("ffmpeg reported " + err, 'r');
-					if (ffstream) {
-						ffstream.destroy();
-						//global.gc();
-					}
-
-					if (process.platform === "linux")
-						command.kill('SIGSTOP'); //This does not work on Windows
-					//command.kill();
-				})
-				.format('s16le').pipe(ffstream);
-
-			connection.playConvertedStream(ffstream, PlaybackOptions);
+			connection.playConvertedStream(processed, PlaybackOptions);
 			//Attach event listeners
 			attachEventsOnPlayback(connection);
-
+			
 			//Report information
 			if (inputObject.type == 'file') {
 				playbackMessage(":musical_note: Playing file `" + CurrentPlayingSound.filename + "`" + utils.flagsToString(inputObject.flags) + ", duration " + utils.humanTime(CurrentPlayingSound.duration) + ". Requested by " + getUserTagName(CurrentPlayingSound.user) + "." + (inputObject.played ? " Resuming from " + Math.round(inputObject.played / 1000) + " second!" : ""));
@@ -767,8 +668,6 @@ function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode
 			}
 		}
 	}
-	else
-		utils.report("There was an error: empty input list for ffmpeg command.", 'r');
 }
 
 //Add sound to the playing queue
@@ -973,7 +872,7 @@ function stopPlayback(connection, checkForLongDuration = false, newFileDurationS
 		//connection.dispatcher.end();
 	}
 	//Kill all ffmpeg Playback processes
-	deletePlaybackCommands();
+	utils.deletePlaybackCommands();
 }
 
 function addHistoryPlaybackElement(element) {

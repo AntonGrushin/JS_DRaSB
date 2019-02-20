@@ -22,12 +22,15 @@ const path = require('path');
 const mkdirp = require('mkdirp');
 const ffmpeg = require('fluent-ffmpeg');
 const moment = require("moment-timezone");
+const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
+
 //Config
 var opt = require('./opt.js');
 var config = opt.opt;
 
 //technical
 var timings = {};
+var ffmpegPlaybackCommands = [];
 
 module.exports = {
 
@@ -333,7 +336,43 @@ module.exports = {
 		return newName + pathParse.ext;
 	},
 
+	targetFileCheck: function (inputObject) {
+		let newTarget = this.get(inputObject, 'flags.target');
+		if (newTarget) {
+			PreparingToPlaySound = false;
+			//Remove command character from the beginning if we have it
+			if (newTarget.substring(0, config.CommandCharacter.length) == config.CommandCharacter)
+				newTarget = newTarget.substring(config.CommandCharacter.length);
+
+			//Check for unwanted characters in the string and remove them
+			newTarget = newTarget.replace(/[/\\?%*:|"<> ]/g, '');
+
+			//Add a number in the end if file exists already
+			newTarget = this.incrementFilename(newTarget + '.' + config.ConvertUploadedAudioContainer, config.folders.Sounds);
+			return newTarget;
+		}
+		else
+			return false;
+	},
+
 	// FFMPEG 
+
+	deletePlaybackCommands: function () {
+		for (i in ffmpegPlaybackCommands) {
+			if (process.platform === "linux")
+				ffmpegPlaybackCommands[i].kill('SIGSTOP');
+			//If command is not stopped within 5 seconds, force to kill the process
+			setTimeout(() => {
+				if (ffmpegPlaybackCommands[i]) {
+					if (process.platform === "linux")
+						try {
+							ffmpegPlaybackCommands[i].kill();
+							delete ffmpegPlaybackCommands[i];
+						} catch (err) { }
+				}
+			}, 100);
+		}
+	},
 
 	checkAudioFormat: function (filepath) {
 		return new Promise((resolve, reject) => {
@@ -418,21 +457,21 @@ module.exports = {
 			for (i in effects) {
 				if (effects[i][0] == 'afir') {
 					if (effects[i][1] == 'echo')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'carPark.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 3, "-f", "lavfi"]);
 					else if (effects[i][1] == 'pot')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'pot.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 					else if (effects[i][1] == 'telephone')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'telephone.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 					else if (effects[i][1] == 'tube')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'tube.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
 					else if (effects[i][1] == 'bath')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'bath.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 2, "-f", "lavfi"]);
 					else if (effects[i][1] == 'can')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'can.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 					else if (effects[i][1] == 'iron')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'ironBucket.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 1, "-f", "lavfi"]);
 					else if (effects[i][1] == 'horn')
-						ffcom = ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 4, "-f", "lavfi"]);
+						ffcom.input(path.resolve(__dirname, config.folders.SoundFilters, 'hornInHall.wav')).input("anullsrc=r=48000:cl=stereo").inputOptions(["-t", 4, "-f", "lavfi"]);
 
 					//Concat source and silence input
 					//filterBuilder.addFilter("concat=v=0:a=1", "[0:a][2:a]");
@@ -443,7 +482,7 @@ module.exports = {
 
 			//Add other inputs
 			for (i in inputs) {
-				ffcom = ffcom.input(inputs[i].file);
+				ffcom.input(inputs[i].file);
 			}
 
 			//Concat filters
@@ -533,7 +572,7 @@ module.exports = {
 			}
 			//Add mapping to the command if we have any filters
 			if (filters.length > 0)
-				ffcom = ffcom.complexFilter(filters).outputOptions('-map', "[" + nextInput + "]");
+				ffcom.complexFilter(filters).outputOptions('-map', "[" + nextInput + "]");
 			return ffcom;
 		}
 		else
@@ -541,61 +580,68 @@ module.exports = {
 	},
 
 	//Process stream
-	processStream: function (inputs, flags, mode = { how: 'concat' }, opusBitrate=false) {
-		let self = this;
+	processStream: function (inputObject, inputList, mode = { how: 'concat' }) {
 		let effects = {};
-		if ('effects' in flags)
-			effects = flags.effects;
+		if ('effects' in inputObject.flags)
+			effects = inputObject.flags.effects;
 
-		//let command = ffmpeg(inputs[0].file);
-		//command = this.addAudioEffects(command, effects);
-		let command = this.buildFfmpegCommand(inputs, effects, mode, config.ComplexFiltersAmountLimit);
+		let command = this.buildFfmpegCommand(inputList, effects, mode, config.ComplexFiltersAmountLimit);
+		if (command) {
+			command.audioChannels(2).audioFrequency(48000);
 
-		const ffstream = new PassThrough();
-		if (opusBitrate)
-			command = command.format('s16le');
-		else
-			command = command.format('s16le').audioChannels(2).audioFrequency(48000);
+			//If we have start time
+			let startTime = this.get(inputObject, 'flags.start');
+			if (startTime)
+				command.seek(startTime);
 
-		command
-			.on('error', function (err) {
-				self.report("ffmpeg reported " + err, 'r');
-				if (ffstream) {
-					ffstream.destroy();
-					//global.gc();
-				}
+			//If we have duration
+			let duration = this.get(inputObject, 'flags.duration');
 
-				if (process.platform === "linux")
-					command.kill('SIGSTOP'); //This does not work on Windows
-				//command.kill();
-			})
-			//.on('end', function (stdout, stderr) {
-			//	//if (stream)
-			//	//	stream.close();
-			//	//if (ffstream)
-			//	//	ffstream.end();
-			//})
-			//.on('progress', function (progress) {
-			//	console.log('Processing: ' + Math.round(progress.percent) / 100 + '% done (' + progress.timemark + ') ' + progress.targetSize + ' Kb');
-			//})
-			.on('start', function (commandLine) {
-				if (config.logging.ConsoleReport.FfmpegDebug) self.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
-				ffmpegPlaybackCommands.push(command);
-			});
+			//if we have end time
+			let endTime = this.get(inputObject, 'flags.end');
+			if (endTime) {
+				let diff = endTime - (startTime ? startTime : 0);
+				duration = diff > 0 ? diff : null;
+			}
 
-		if (doPipe) {
-			command = command.pipe(ffstream);
-			return ffstream;
+			if (duration)
+				command.duration(duration);
+
+
+			//Redirect to an output
+			let target = this.get(inputObject, 'flags.target');
+			if (target) {
+				return command;
+			}
+			//Play on current channel
+			else {
+
+				const ffstream = new PassThrough();
+				command
+					.on('start', function (commandLine) {
+						if (config.logging.ConsoleReport.FfmpegDebug) this.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+						ffmpegPlaybackCommands.push(command);
+					})
+					.on('error', function (err) {
+						this.report("ffmpeg reported " + err, 'r');
+						if (ffstream) {
+							ffstream.destroy();
+							//global.gc();
+						}
+
+						if (process.platform === "linux")
+							command.kill('SIGSTOP'); //This does not work on Windows
+						//command.kill();
+					})
+					.format('s16le').pipe(ffstream);
+
+				return ffstream;
+			}
 		}
-		else
-			return command;
-
-			//.audioCodec('libmp3lame')
-			//.audioBitrate('320k')
-			//.output(path.resolve(__dirname, config.folders.Temp, flags.duration + "s_" + path.parse(inputs[0].file).name + '.mp3'))
-			//.run();
-		
-		
+		else {
+			this.report("There was an error: empty input list for ffmpeg command.", 'r');
+			return false;
+		}
 	},
 
 	// ========= LOGGING =========
