@@ -163,13 +163,17 @@ function breakMessage(message, usedCount = 0, beginMessage="", endMessage="", ba
 		}
 		else {
 			for (i in cutted) {
-				if (thisChunk.length + cutted[i].length <= config.MessageCharacterLimit - (beginMessage.length + endMessage.length + 2 + usedCount))
+				if (thisChunk.length + cutted[i].length <= config.MessageCharacterLimit - (beginMessage.length + endMessage.length + 2 + usedCount)) {
 					thisChunk += cutted[i] + "\n";
+				}
 				else {
 					result.push(beginMessage + thisChunk + endMessage);
 					thisChunk = cutted[i] + "\n";
 				}
 			}
+			//Add last chunk if it exists
+			if (thisChunk.length > 0)
+				result.push(beginMessage + thisChunk + endMessage);
 			return result;
 		}
 	}
@@ -1175,8 +1179,8 @@ client.on('message', async message => {
 											for (i in found) {
 												resultList += config.CommandCharacter + found[i] + "\n";
 											}
-											let beginMessage = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ";
-											messagesToSend = breakMessage(resultList, beginMessage.length, "```", "```");
+											let beginMessage = "This is the list of all " + found.length + " avaliable sound files. Type any of the following commands or part of it to play the file: ";
+											let messagesToSend = breakMessage(resultList, beginMessage.length, "```", "```");
 											//resultList = "This is the list of all avaliable sound files. Type any of the following commands or part of it to play the file: ```" + resultList + "```";
 											for (i in messagesToSend) {
 												let thisChunk = (i == 0 ? beginMessage : "") + messagesToSend[i];
