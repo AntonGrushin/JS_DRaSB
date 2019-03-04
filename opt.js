@@ -45,11 +45,11 @@ function readConfig(optionToRead, defaultValue) {
 	let value = get(config, optionToRead);
 	let currentValue = get(opt, optionToRead);
 	//If value is already set in system and none in config, leave it be
-	if (currentValue && !value) {
+	if (currentValue && (typeof value == "undefined" || value == null)) {
 		return currentValue;
 	}
 	//If value is in config, use it
-	else if (value) {
+	else if (value || value == false) {
 		return value;
 	}
 	//Else return default one
