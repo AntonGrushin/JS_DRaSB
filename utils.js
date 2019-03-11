@@ -243,7 +243,7 @@ module.exports = {
 		if (idResult)
 			output['id'] = Number(idResult[1]);
 		//Output target
-		let tarResult = inString.match(/[>=]+[ ]+([^\r\n\t\f\v]+)/);
+		let tarResult = inString.match(/[ ]+[>=]+[ ]+([^\r\n\t\f\v]+)/);
 		if (tarResult)
 			output['target'] = tarResult[1];
 		

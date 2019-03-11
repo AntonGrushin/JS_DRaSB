@@ -901,6 +901,8 @@ module.exports = {
 						result['left'] = after.time;
 					}
 				}
+				else
+					result['left'] = Date.now()+1;
 			}
 		}
 		return result;

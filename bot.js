@@ -751,7 +751,7 @@ function playQueue(connection) {
 					if (config.logging.ConsoleReport.SoundsPlaybackDebug) utils.report("inputObject.type PASSED", 'c', config.logging.LogFileReport.SoundsPlaybackDebug); //debug message
 					CurrentPlayingSound = { 'type': 'file', 'path': path.resolve(__dirname, config.folders.Sounds, inputObject.filename), 'filename': inputObject.filename, 'duration': inputObject.duration, 'user': inputObject.user, 'flags': inputObject.flags };
 					if (inputObject.played) CurrentPlayingSound['played'] = inputObject.played;
-					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
+					CurrentVolume = inputObject.flags.volume ? calcVolumeToSet(inputObject.flags.volume > 100 ? (checkPermission(inputObject.user, 11) ? inputObject.flags.volume : 100 ) : inputObject.flags.volume) : calcVolumeToSet(db.getUserVolume(inputObject.user.id));
 					PlaybackOptions = { 'volume': CurrentVolume, 'passes': config.VoicePacketPasses, 'bitrate': 'auto' };
 					if (inputObject.played) PlaybackOptions['seek'] = inputObject.played / 1000;
 					if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("Playback") + " Creating File dispatcher...", 'c', config.logging.LogFileReport.DelayDebug); //debug message
@@ -1552,7 +1552,7 @@ client.on('message', async message => {
 									let sessionInfo = null;
 									if (additionalFlags['id'])
 										sessionInfo = db.getTalkSession(additionalFlags['id']);
-
+									
 									let sequenceMode = true;
 									//If there is 'id' then use sessionInfo data, else if no date, use 'ago' time, else use random
 									let reqDate = sessionInfo ? sessionInfo.startTime-1 :
@@ -1571,6 +1571,9 @@ client.on('message', async message => {
 									if (!permPlayAnyonesRecord && permPlayIfWasOnChannel && userPresence.presented) {
 										endTime = sessionInfo ? sessionInfo.endTime > userPresence.left ? userPresence.left : sessionInfo.endTime : 0;
 									}
+
+									//Write current records to DB in case user wants to play them
+									writeQueueToDB();
 
                                     //If there is no exact date, no start mark and no timetag, or command is quote => make it 'phrase'
 									if (!additionalFlags['date'] && !additionalFlags['timetag'] && !additionalFlags['id'] && !additionalFlags['start'] || command == 'random' || command == 'r')
@@ -1950,7 +1953,7 @@ function handleExitEvent() {
 	let connection = getCurrentVoiceConnection();
 	if (connection)
 		stopPlayback(connection, false);
-	writeQueueToDB()
+	writeQueueToDB();
 	client.destroy();
 	db.shutdown();
 	setTimeout(() => {
