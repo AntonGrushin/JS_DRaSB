@@ -1423,10 +1423,22 @@ client.on('message', async message => {
 								}
 								break;
 							}
+						//Stop the bot with error code 128+1 for start.sh script to keep looping and start application again
+						//This only works when the bot is launched by 'start.sh' script
+						case 'reboot':
+						case 'restart':
+							{
+								if (checkPermission(guildMember, 30, message.channel)) {
+									sendInfoMessage("Restarting the bot... :robot:", message.channel, message.author);
+									setTimeout(() => {
+										handleExitEvent(129);
+									}, 1000);
+								}
+								break;
+							}
 						//Rejoin the channel (Leave and join again - sometimes people cant hear the bot, usually this helps)
 						case 'rejoin':
 						case 'resummon':
-						case 'restart':
 							{
 								if ((config.EnableSoundboard || config.EnableRecording) && checkPermission(guildMember, 8, message.channel)) {
 									let playAfterRejoining = soundIsPlaying;
@@ -1948,8 +1960,8 @@ process.on('uncaughtException', function (exception) {
 
 //Handle cleanup before program exits
 process.stdin.resume();
-function handleExitEvent() {
-	utils.report("Recieved requested to stop the application, cleaning up...", 'y');
+function handleExitEvent(exitcode = 0) {
+	utils.report("Recieved requested to " + ( exitcode ? "restart" : "stop" ) + " the application, cleaning up...", 'y');
 	let connection = getCurrentVoiceConnection();
 	if (connection)
 		stopPlayback(connection, false);
@@ -1957,7 +1969,7 @@ function handleExitEvent() {
 	client.destroy();
 	db.shutdown();
 	setTimeout(() => {
-		process.exit();
+		process.exit(exitcode);
 	}, 500);
 };
 

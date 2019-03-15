@@ -581,6 +581,7 @@ module.exports = {
 
 	//Process stream
 	processStream: function (inputObject, inputList, mode = { how: 'concat' }) {
+		let self = this;
 		let effects = {};
 		if ('effects' in inputObject.flags)
 			effects = inputObject.flags.effects;
@@ -619,11 +620,11 @@ module.exports = {
 				const ffstream = new PassThrough();
 				command
 					.on('start', function (commandLine) {
-						if (config.logging.ConsoleReport.FfmpegDebug) this.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+						if (config.logging.ConsoleReport.FfmpegDebug) self.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
 						ffmpegPlaybackCommands.push(command);
 					})
 					.on('error', function (err) {
-						this.report("ffmpeg reported " + err, 'r');
+						self.report("ffmpeg reported " + err, 'r');
 						if (ffstream) {
 							ffstream.destroy();
 							//global.gc();
@@ -639,7 +640,7 @@ module.exports = {
 			}
 		}
 		else {
-			this.report("There was an error: empty input list for ffmpeg command.", 'r');
+			self.report("There was an error: empty input list for ffmpeg command.", 'r');
 			return false;
 		}
 	},
