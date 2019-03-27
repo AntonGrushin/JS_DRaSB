@@ -129,6 +129,9 @@ module.exports = {
 	//How many times to send the voice packet to reduce packet loss
 	VoicePacketPasses: 2,
 
+	//Enable 'get' command that allows users with permission to request sound files that gets uploaded by bot on the channel as attachment instead of playing it
+	EnableGetCommand: true,
+
 	//Shall we use 'audioonly' filter when requesting data from YouTube? This will decrease brandwidth usage but will break resume function: all youtube will restart from the beginning after pausing
 	//  Warning: both methods may not work due to bug in ytdl 'begin' option: https://github.com/fent/node-ytdl-core/issues/219
 	UseAudioOnlyFilterForYoutube: true,
@@ -198,7 +201,7 @@ module.exports = {
 
 	//Check for 'Recordings' database integrity on startup.
 	//  Bot will check that database records were not moved/added. If they were, it will rescan the folder and update the database.
-	CheckRecFolderOnStartup: true,
+	CheckRecFolderOnStartup: false,
 
 	// ======== PERFORMANCE ========
 
@@ -208,6 +211,9 @@ module.exports = {
 
 	//How many parallel file scans can run (for updating recordings database)
 	FileScanParallelLimit: 4,
+
+	//How many 'get' commands to process simultaneously
+	FileRequestsParallelProcessLimit: 2,
 
 	//Limit amout of DB records per transaction when writing big lists of data to DB (0 is no limit)
 	//   If this amount is too small (<500), it will result in making DB transactions too often and slowing down the DB connection,
@@ -260,6 +266,7 @@ module.exports = {
 			PlayRecordsIfWasOnTheChannel: true,
 			PlayAnyonesRecords: false,
 			PlayRandomQuote: true,
+			RequestSoundFilesSending: true,
         },
     },
 

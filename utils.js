@@ -53,9 +53,9 @@ module.exports = {
 	},
 
 	//Get filename string timestamp
-	fileTimeNow: function () {
+	fileTimeNow: function (date=null) {
 		let out = {};
-		let now = new Date();
+		let now = date ? date : new Date();
 		var timeonly = this.pad(now.getHours()) + '-' + this.pad(now.getMinutes()) + '-' + this.pad(now.getSeconds()) + '_' + this.pad(now.getMilliseconds(), 3);
 		out['now'] = now;
 		out['file'] = (now.getFullYear() + '-' + this.pad(now.getMonth() + 1) + "-" + this.pad(now.getDate()) + "_" + timeonly);
@@ -67,6 +67,18 @@ module.exports = {
 		fs.unlink(dest, err => {
 			if (err)
 				this.report("Could't delete file '" + dest + "'. Error: " + err, 'r');
+		});
+	},
+
+	//Delete list of files
+	deleteFiles: function(files) {
+		var i = files.length;
+		files.forEach(function (filepath) {
+			fs.unlink(filepath, function (err) {
+				i--;
+				if (err) 
+					this.report("Could't delete file '" + filepath + "'. Error: " + err, 'r');
+			});
 		});
 	},
 
@@ -580,7 +592,7 @@ module.exports = {
 	},
 
 	//Process stream
-	processStream: function (inputObject, inputList, mode = { how: 'concat' }) {
+	processStream: function (inputObject, inputList, mode = { how: 'concat' }, getCommand=false) {
 		let self = this;
 		let effects = {};
 		if ('effects' in inputObject.flags)
@@ -611,7 +623,7 @@ module.exports = {
 
 			//Redirect to an output
 			let target = this.get(inputObject, 'flags.target');
-			if (target) {
+			if (target || getCommand) {
 				return command;
 			}
 			//Play on current channel

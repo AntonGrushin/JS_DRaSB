@@ -21,6 +21,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const https = require('https');
 const client = new Discord.Client();
+const async = require("async");
 //var heapdump = require('heapdump');
 const { PassThrough } = require('stream');  //For piping file stream to ffmpeg
 
@@ -41,6 +42,7 @@ var RecordsDBReady = false;
 var LastChannelChangeTimeMs = Date.now(); //Time in ms when we did last channel change so we can wait until new join to stop command flooding
 var ChannelWaitingToJoin = null;
 var PlayingQueue = [];
+var GetFileQueue = [];
 var PausingThePlayback = false;
 var CurrentPlayingSound = {};
 var CurrentVolume = 0.0;
@@ -238,6 +240,7 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 	//RepeatLastPlayback			16
 	//DeleteOwnLocalAudioFiles		17
 	//RenameOwnLocalAudioFiles		18
+	//RequestSoundFilesSending		19
 
 	//If he is admin
 	if (config.permissions.AdminsList.indexOf(guildmember.user.id) > -1)
@@ -267,6 +270,7 @@ function checkPermission(guildmember, bit=31, channel=null, postMessage=true) {
 		permission += config.permissions.User.RepeatLastPlayback << 16;
 		permission += config.permissions.User.DeleteOwnLocalAudioFiles << 17;
 		permission += config.permissions.User.RenameOwnLocalAudioFiles << 18;
+		permission += config.permissions.User.RequestSoundFilesSending << 19;
 	}
 	let result = (permission & (1 << bit)) > 0;
 	if (!result && postMessage)
@@ -571,7 +575,7 @@ function volumeIterate(dispatcher, itLeft, waitperiod, volumeChange, volumeNow) 
 	}
 }
 
-//What to do when fdmpeg stream is ready to be executed
+//What to do when ffmpeg stream is ready to be executed
 function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode = { how: 'concat' }) {
 	const processed = utils.processStream(inputObject, inputList, mode);
 	if (processed) {
@@ -580,7 +584,6 @@ function executeFFMPEG(connection, PlaybackOptions, inputObject, inputList, mode
 		if (target) {
 			PreparingToPlaySound = false;
 			target = utils.targetFileCheck(inputObject);
-
 			if (target) {
 				let tempFile = path.resolve(__dirname, config.folders.Temp, target);
 				let targetFile = path.resolve(__dirname, config.folders.Sounds, target);
@@ -726,6 +729,197 @@ function attachEventsOnPlayback(connection) {
 		soundIsPlaying = false;
 		LastPlaybackTime = Date.now();
 	});
+}
+
+//Send file
+function sendSoundFile(file, channel, filename=null) {
+	return new Promise((resolve, reject) => {
+		if (BotReady) {
+			let channelUserName = (channel.type == "dm" ? "user '" + utils.get(client.guilds.get(config.guildId).members.get(channel.id), 'name') + "'" : "channel '" + channel.name + "'") + " (" + channel.id + ")";
+			// Send a local file
+			channel.send({
+				files: [{
+					attachment: file,
+					name: filename ? filename : path.parse(file).name + path.parse(file).ext
+				}]
+			})
+				.then(message => {
+					utils.report('Sent file "' + path.parse(file).name + path.parse(file).ext + '" of size ' + Math.round(utils.get(message.attachments.first(), 'filesize') / 1024) + ' Kb to ' + channelUserName, 'm');
+					return resolve();
+				})
+				.catch(error => {
+					utils.report('Error sending the file: "' + file + '": ' + error, 'r');
+					return resolve(error);
+				});
+		}
+	});
+}
+
+//Process and send sound file if requested
+function processRequestedFileQueue() {
+	if (GetFileQueue.length) {
+		inputObject = GetFileQueue.shift();
+		if (inputObject.type == 'file') {
+			//If there are no effects, return original file without reencoding
+			if (!utils.get(inputObject, "flags.effects")) {
+				sendSoundFile(path.resolve(__dirname, config.folders.Sounds, inputObject.filename), inputObject.flags.getCommandChannel);
+				processRequestedFileQueue();
+			}
+			//else, create new file
+			else {
+				const processed = utils.processStream(inputObject, [{ file: path.resolve(__dirname, config.folders.Sounds, inputObject.filename) }], { how: 'concat' }, true);
+				if (processed) {
+					let targetFile = path.resolve(__dirname, config.folders.Temp, utils.sanitizeFilename(inputObject.filename) + '_withEffects' + '.' + config.RecordingAudioContainer);
+					processed
+						.audioCodec(config.RecordingAudioCodec)
+						.audioBitrate(config.RecordingAudioBitrate)
+						.on('error', function (err) {
+							utils.report("ffmpeg reported error: " + err, 'r');
+							utils.deleteFile(targetFile);
+						})
+						.on('end', function (stdout, stderr) {
+							sendSoundFile(targetFile, inputObject.flags.getCommandChannel)
+								.then(() => utils.deleteFile(targetFile));
+							processRequestedFileQueue();
+						})
+						.on('codecData', format => {
+							if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
+						})
+						.on('start', function (commandLine) {
+							//if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+						})
+						.output(targetFile)
+						.run();
+				}
+			}
+		}
+		else if (inputObject.type == 'recording') {
+			
+			let lastChunkReportTime = new Date();
+			let totalDurationMs = inputObject.searchresult.totalAudioDuration;
+			let chunkCount = inputObject.chunks ? inputObject.chunks : 1;
+			let chunksArray = [];
+			let startTime = new Date(inputObject.searchresult.startTime);
+			
+			chunksArray.push(inputObject);
+			for (let c = 1; c < chunkCount; c++) {
+				let nextChunkResult = db.makeRecFileList(chunksArray[chunksArray.length - 1].searchresult.endTime, chunksArray[chunksArray.length - 1].mode, config.SearchHoursPeriod * 3600000, chunksArray[chunksArray.length - 1].usersList);
+				let QueueElement = { 'type': 'recording', 'searchresult': nextChunkResult, 'usersList': chunksArray[chunksArray.length - 1].usersList, 'mode': chunksArray[chunksArray.length - 1].mode, 'chunkIndex': chunksArray[chunksArray.length - 1].chunkIndex + 1, 'chunks': chunksArray[chunksArray.length - 1].chunks, 'user': chunksArray[chunksArray.length - 1].user, 'flags': chunksArray[chunksArray.length - 1].flags, 'duration': chunksArray[chunksArray.length - 1].duration };
+				if (nextChunkResult) {
+					chunksArray.push(QueueElement);
+					totalDurationMs += nextChunkResult.totalAudioDuration;
+					//console.log("Iteration " + c + " of " + chunkCount + ".Adding chunk #" + QueueElement.chunkIndex + " to the list.");
+				}
+			}
+			
+			let chunkFilesList = [];
+			//console.log("Reporting " + chunkCount + " chunks with total duration of " + Math.round(totalDurationMs / 60000) + " minutes.");
+			//First, save all chunks as separate files
+			async.eachLimit(chunksArray, config.FileRequestsParallelProcessLimit, (chunkObject, callback) => {
+				const processed = utils.processStream(chunkObject, chunkObject.searchresult.list, { how: chunkObject.searchresult.method, channels: chunkObject.searchresult.channelsToMix }, true);
+				if (processed) {
+					let targetFile = path.resolve(__dirname, config.folders.Temp, "recChunk_" + utils.pad(chunkObject.chunkIndex, 3) + utils.fileTimeNow(new Date(chunkObject.searchresult.startTime)).file + '.' + config.RecordingAudioContainer);
+					//console.log("Creating chunk #" + chunkObject.chunkIndex + " of " + chunkFilesList.length + " total (Used " + chunkObject.searchresult.list.length + " files).");
+					processed
+						.audioCodec(config.RecordingAudioCodec)
+						.audioBitrate(config.RecordingAudioBitrate)
+						.on('error', function (err) {
+							utils.report("ffmpeg reported error: " + err, 'r');
+							utils.deleteFile(targetFile);
+						})
+						.on('end', function (stdout, stderr) {
+							//sendSoundFile(targetFile, chunkObject.flags.getCommandChannel)
+							//	.then(() => utils.deleteFile(targetFile));
+							chunkFilesList[chunkCount > 1 ? chunkObject.chunkIndex - 1 : 0] = targetFile;
+
+							//Periodically report progress
+							if (Date.now() - lastChunkReportTime >= 5000) {
+								utils.report("Creating chunks: " + chunkObject.chunkIndex + "/" + chunkCount + " (" + (Math.round(10000 * chunkObject.chunkIndex / chunkCount) / 100) + " %) done...", 'c', false);
+								sendInfoMessage("Creating combined file (" + (Math.round(100 * chunkObject.chunkIndex / chunkCount)) + "% done so far), please wait...", inputObject.flags.getCommandChannel, inputObject.user.user);
+								lastChunkReportTime = Date.now();
+							}
+
+							callback();
+						})
+						.on('codecData', format => {
+							if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
+						})
+						.on('start', function (commandLine) {
+							//if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+						})
+						.output(targetFile)
+						.run();
+					
+					//executeFFMPEG(connection, PlaybackOptions, inputObject, inputObject.searchresult.list, { how: inputObject.searchresult.method, channels: inputObject.searchresult.channelsToMix });
+				}
+
+
+				
+			}, () => {
+			//Second, combine all chunks to one file and send it
+				
+				//Create concat file for ffmpeg
+				let concatTextContents = "";
+				chunkFilesList.forEach(element => {
+					concatTextContents += "file '"+element + "'\n";
+				});
+				let concateFile = path.resolve(__dirname, config.folders.Temp, utils.fileTimeNow(new Date(startTime)).file) + "_conc.txt";
+				fs.writeFile(concateFile, concatTextContents, function (err, data) {
+					if (!err) {
+						let targetFile = path.resolve(__dirname, config.folders.Temp, utils.fileTimeNow(new Date(startTime)).file + '_' + Math.round(totalDurationMs/60000) + 'minutes' + '.' + config.RecordingAudioContainer);
+						let FFcommand = ffmpeg(concateFile, { niceness: 20 })
+							.inputOptions(['-f concat', '-safe 0'])
+							.audioCodec('copy')
+							.on('error', function (err) {
+								utils.report("ffmpeg reported error: " + err, 'r');
+								utils.deleteFiles(chunkFilesList);
+								utils.deleteFile(concateFile);
+							})
+							.on('end', function (stdout, stderr) {
+								utils.deleteFiles(chunkFilesList);
+								utils.deleteFile(concateFile);
+								processRequestedFileQueue();
+								//Add to the database
+								fs.stat(targetFile, (err, stats) => {
+									if (!err) {
+										if (stats.size < 8000000)
+											sendSoundFile(targetFile, inputObject.flags.getCommandChannel)
+												.then(() => utils.deleteFile(targetFile));
+										else
+											utils.report("File '" + path.parse(targetFile).name + path.parse(targetFile).ext + "' was too big to be sent (" + Math.round(stats.size / 1048576) + " Mb). Take it from Temp folder please! ", 'y');
+										//queueDBWrite.push({ function: 'recordingAdd', argument: { target: targetFile, time: fileTimeNow.now.getTime(), duration: durationMs, userid: user.id, filesize: stats.size, ignorePhrase: false, channel: connection.channel.id, usersListening: countChannelMembers(connection.channel) } });
+									}
+									else
+										utils.report("Couldn't read file property of '" + targetFile + "'. Error: " + err, 'r');
+								});
+							})
+							.on('codecData', format => {
+								if (config.logging.ConsoleReport.RecordDebugMessages) utils.report("ffmpeg reports stream properties. Duration:" + format['duration'] + ", audio: " + format['audio_details'] + ".", 'c', config.logging.LogFileReport.RecordDebugMessages); //debug message
+							})
+							.on('start', function (commandLine) {
+								//if (config.logging.ConsoleReport.FfmpegDebug) utils.report('Spawned Ffmpeg with command: ' + commandLine, 'w', config.logging.LogFileReport.FfmpegDebug); //debug message
+							})
+							.output(targetFile)
+							.run();
+					}
+					else {
+						utils.report("Error while writing concat txt file: " + err, 'r');
+						utils.deleteFiles(chunkFilesList);
+					}
+				});
+
+			});
+
+				
+			
+			
+		}
+	}
+	
+	
+
+
+	
 }
 
 //Playing next sound in the queue
@@ -1101,12 +1295,21 @@ client.on('message', async message => {
 			if (message.content.substring(0, config.CommandCharacter.length) == config.CommandCharacter) {
 				let args = message.content.substring(config.CommandCharacter.length).split(' ');
 				let additionalFlags = utils.readFlags(message.content);
+				let thisIsGetRequest = false;
                 //let additionalFlags = {};
 				let command = args[0].toLowerCase();
 				args = args.splice(1);
 
 				if (config.RestrictCommandsToSingleChannel && message.channel.id == config.ReportChannelId || config.ReactToDMCommands && message.channel.type == 'dm' || !config.RestrictCommandsToSingleChannel) {
 					utils.report("Command from " + userName + ": " + message.content.replace(/(\r\n\t|\n|\r\t)/gm, " "), 'm');
+
+					//if its 'get' command, cut it from the request and proceed with execution
+					if (["get", "send", "post"].indexOf(command.toLowerCase()) > -1) {
+						additionalFlags["getCommandChannel"] = message.channel;
+						thisIsGetRequest = true;
+						command = args[0].toLowerCase();
+						args = args.splice(1);
+					}
 
 					switch (command) {
 						case 'scan':
@@ -1365,46 +1568,56 @@ client.on('message', async message => {
 							{
 								if (config.EnableSoundboard) {
 									if (checkPermission(guildMember, 16, message.channel)) {
-										prepareForPlaybackOnChannel(guildMember)
-											.then((connection) => {
-												if (connection) {
-													if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-													let QueueElement = null;
-													if (!isNaN(args[0])) {
-														let index = Number(args[0]) > config.PlaybackHistoryLastSize ? config.PlaybackHistoryLastSize : Number(args[0]) < 1 ? 0 : Number(args[0]) - 1;
-														if (lastQueueElements.length > 0 && lastQueueElements.length >= index + 1)
-															QueueElement = lastQueueElements.splice(index)[0];
-														else
-															sendInfoMessage("Nothing found!", message.channel, message.author);
-													}
-													else {
-														if (lastQueueElements.length > 0)
-															QueueElement = lastQueueElements.shift();
-														else
-															sendInfoMessage("History is empty!", message.channel, message.author);
-													}
-													if (QueueElement) {
-														QueueElement.user = guildMember;
-														//Replace flags with new ones
-														for (var key in additionalFlags) if (additionalFlags[key] && additionalFlags[key] != NaN) QueueElement.flags[key] = additionalFlags[key];
-														//If something is playing right now
-														if (soundIsPlaying) {
-															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-															//Stop or pause the playback (depending on length of playing sound)
-															stopPlayback(connection, true);
-															//Add to the front position in queue
-															PlayingQueue.unshift(QueueElement);
-															//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+										let QueueElement = null;
+										if (!isNaN(args[0])) {
+											let index = Number(args[0]) > config.PlaybackHistoryLastSize ? config.PlaybackHistoryLastSize : Number(args[0]) < 1 ? 0 : Number(args[0]) - 1;
+											if (lastQueueElements.length > 0 && lastQueueElements.length >= index + 1)
+												QueueElement = lastQueueElements.splice(index)[0];
+											else
+												sendInfoMessage("Nothing found!", message.channel, message.author);
+										}
+										else {
+											if (lastQueueElements.length > 0)
+												QueueElement = lastQueueElements.shift();
+											else
+												sendInfoMessage("History is empty!", message.channel, message.author);
+										}
+
+										if (thisIsGetRequest) {
+											if (QueueElement) {
+												GetFileQueue.push(QueueElement);
+												processRequestedFileQueue();
+											}
+										}
+										else {
+											prepareForPlaybackOnChannel(guildMember)
+												.then((connection) => {
+													if (connection) {
+														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+														
+														if (QueueElement) {
+															QueueElement.user = guildMember;
+															//Replace flags with new ones
+															for (var key in additionalFlags) if (additionalFlags[key] && additionalFlags[key] != NaN) QueueElement.flags[key] = additionalFlags[key];
+															//If something is playing right now
+															if (soundIsPlaying) {
+																if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																//Stop or pause the playback (depending on length of playing sound)
+																stopPlayback(connection, true);
+																//Add to the front position in queue
+																PlayingQueue.unshift(QueueElement);
+																//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+															}
+															//Nothing is playing right now
+															else {
+																if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																PlayingQueue.unshift(QueueElement);
+																handleQueue('repeatRequest');
+															}
 														}
-														//Nothing is playing right now
-														else {
-															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("repeatCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-															PlayingQueue.unshift(QueueElement);
-															handleQueue('repeatRequest');
-														}
 													}
-												}
-											});
+												});
+										}
 									}
 								}
 								break;
@@ -1602,42 +1815,51 @@ client.on('message', async message => {
 									
 									if (!sequenceMode && permPlayRandomQuote ||
 										(sequenceMode && (userPresence.presented && permPlayIfWasOnChannel || permPlayAnyonesRecord))) {
-										
+
+
 										let found = db.makeRecFileList(reqDate, mode, config.SearchHoursPeriod * 3600000, users);
 
 										if (found) {
-											prepareForPlaybackOnChannel(guildMember)
-												.then((connection) => {
-													if (connection) {
-														if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+											if (sequenceMode) {
+												mode.duration = config.RecPlaybackChunkDuration * 1000;
+												let firstChunk = db.makeRecFileList(found.startTime - 1, mode, config.SearchHoursPeriod * 3600000, users);
+												//Create Queue element
+												QueueElement = { 'type': 'recording', 'searchresult': firstChunk, 'mode': mode, 'limits': { start: found.startTime, end: found.endTime }, 'usersList': users, 'chunkIndex': 1, 'chunks': Math.ceil(found.duration / (config.RecPlaybackChunkDuration * 1000)), 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
+											}
+											else {
+												//Create Queue element
+												QueueElement = { 'type': 'recording', 'searchresult': found, 'mode': mode, 'limits': { start: found.startTime, end: found.endTime }, 'usersList': users, 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
+											}
 
-														if (sequenceMode) {
-															mode.duration = config.RecPlaybackChunkDuration * 1000;
-															let firstChunk = db.makeRecFileList(found.startTime - 1, mode, config.SearchHoursPeriod * 3600000, users);
-															//Create Queue element
-															QueueElement = { 'type': 'recording', 'searchresult': firstChunk, 'mode': mode, 'limits': { start: found.startTime, end: found.endTime }, 'usersList': users, 'chunkIndex': 1, 'chunks': Math.ceil(found.duration / (config.RecPlaybackChunkDuration * 1000)), 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
+											if (thisIsGetRequest) {
+												if (QueueElement) {
+													GetFileQueue.push(QueueElement);
+													processRequestedFileQueue();
+												}
+											}
+											else {
+												prepareForPlaybackOnChannel(guildMember)
+													.then((connection) => {
+														if (connection) {
+															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+															//If something is playing right now
+															if (soundIsPlaying) {
+																if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																//Stop or pause the playback (depending on length of playing sound)
+																stopPlayback(connection, true);
+																//Add to the front position in queue
+																PlayingQueue.unshift(QueueElement);
+																//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+															}
+															//Nothing is playing right now
+															else {
+																if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																PlayingQueue.unshift(QueueElement);
+																handleQueue('newSoundRequest');
+															}
 														}
-														else {
-															//Create Queue element
-															QueueElement = { 'type': 'recording', 'searchresult': found, 'mode': mode, 'limits': { start: found.startTime, end: found.endTime }, 'usersList': users, 'user': guildMember, 'flags': additionalFlags, 'duration': found.duration };
-														}
-														//If something is playing right now
-														if (soundIsPlaying) {
-															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand") + " Stopping playback.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-															//Stop or pause the playback (depending on length of playing sound)
-															stopPlayback(connection, true);
-															//Add to the front position in queue
-															PlayingQueue.unshift(QueueElement);
-															//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
-														}
-														//Nothing is playing right now
-														else {
-															if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("RecPlayCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-															PlayingQueue.unshift(QueueElement);
-															handleQueue('newSoundRequest');
-														}
-													}
-												});
+													});
+											}
 										}
 										else
 											sendInfoMessage("Nothing was found.", message.channel, message.author);
@@ -1763,31 +1985,39 @@ client.on('message', async message => {
 										.then(found => {
 											if (found.count == 1 || (!config.StrictAudioCommands && found.count > 1)) {
 												if (checkPermission(guildMember, 2, message.channel)) {
-													prepareForPlaybackOnChannel(guildMember)
-														.then((connection) => {
-															if (connection) {
-																if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+													//Create Queue element
+													QueueElement = { 'type': 'file', 'filename': found.sound.filenameFull, 'user': guildMember, 'duration': found.sound.duration, 'flags': additionalFlags };
+
+													if (thisIsGetRequest) {
+														if (QueueElement) {
+															GetFileQueue.push(QueueElement);
+															processRequestedFileQueue();
+														}
+													}
+													else {
+														prepareForPlaybackOnChannel(guildMember)
+															.then((connection) => {
+																if (connection) {
+																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Checked channel presence.", 'c', config.logging.LogFileReport.DelayDebug); //debug message
 																
-																//Create Queue element
-																QueueElement = { 'type': 'file', 'filename': found.sound.filenameFull, 'user': guildMember, 'duration': found.sound.duration, 'flags': additionalFlags };
-																
-																//If something is playing right now
-																if (soundIsPlaying) {
-																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Stopping playback!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-																	//Stop or pause the playback (depending on length of playing sound)
-																	stopPlayback(connection, true, found.sound.duration);
-																	//Add to the front position in queue
-																	PlayingQueue.unshift(QueueElement);
-																	//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+																	//If something is playing right now
+																	if (soundIsPlaying) {
+																		if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand") + " Stopping playback!", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																		//Stop or pause the playback (depending on length of playing sound)
+																		stopPlayback(connection, true, found.sound.duration);
+																		//Add to the front position in queue
+																		PlayingQueue.unshift(QueueElement);
+																		//Do not run handleQueue() here, since it will be run due to dispatcher.end Event after stopping the playback
+																	}
+																	//Nothing is playing right now
+																	else {
+																		if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
+																		PlayingQueue.unshift(QueueElement);
+																		handleQueue('newSoundRequest');
+																	}
 																}
-																//Nothing is playing right now
-																else {
-																	if (config.logging.ConsoleReport.DelayDebug) utils.report(utils.msCount("FileCommand", 'reset') + " Launching handleQueue().", 'c', config.logging.LogFileReport.DelayDebug); //debug message
-																	PlayingQueue.unshift(QueueElement);
-																	handleQueue('newSoundRequest');
-																}
-															}
-														});
+															});
+													}
 												}
 											}
 											else if (found.count > 1)
@@ -1809,7 +2039,7 @@ client.on('message', async message => {
 						.catch(error => utils.report("Can't delete command message sent by " + userName + " on '" + message.channel.name + "' channel. Error: " + error, 'r'));
 			}
 			//If its a file sent in private
-			if (message.channel.type == 'dm' && message.attachments.size > 0 && config.EnableSoundboard && config.AcceptDirectMessagesAudio) {
+			if (message.channel.type == 'dm' && message.author != client.user && message.attachments.size > 0 && config.EnableSoundboard && config.AcceptDirectMessagesAudio) {
 				if (checkPermission(guildMember, 4, message.channel)) {
 					let attachments = message.attachments.array();
 					for (i in attachments) {

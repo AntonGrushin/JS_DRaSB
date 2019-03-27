@@ -87,6 +87,11 @@ module.exports = {
 		return db;
 	},
 
+	//Write queued records to DB
+	executeQueue: function () {
+
+	},
+
 	//Create all tables or make sure they exist
 	prepareDatabase: function (reportStats = true) {
 		return new Promise((resolve, reject) => {
@@ -768,7 +773,7 @@ module.exports = {
 					additionalCondition = additionalCondition.slice(0, additionalCondition.length - 2);
 					additionalCondition += ")";
 				}
-				const result = db.prepare('SELECT * FROM recordings WHERE 1 ' + additionalCondition + " ORDER BY startTime ASC").all(flags);
+				const result = db.prepare('SELECT * FROM recordings WHERE `exists`=1 ' + additionalCondition + " ORDER BY startTime ASC").all(flags);
 				for (i in result) {
 					//Check if current record is too far away
 					if (result[i]['startTime'] - lastRecordTime >= gapForNextTalkMs) {

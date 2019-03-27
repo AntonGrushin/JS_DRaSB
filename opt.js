@@ -119,9 +119,11 @@ module.exports = {
 		opt.ChannelJoiningQueueWaitTimeMs = readConfig('ChannelJoiningQueueWaitTimeMs', 1000);
 		opt.AcceptedAudioFormats = readConfig('AcceptedAudioFormats', ['mp3', 'ac3', 'opus', 'aac']);
 		opt.ConvertUploadedAudioFiles = readConfig('ConvertUploadedAudioFiles', true);
-		opt.ConvertUploadedAudioCodec = readConfig('ConvertUploadedAudioCodec', 'libmp3lame');
-		opt.ConvertUploadedAudioBitrate = readConfig('ConvertUploadedAudioBitrate', '240k');
-		opt.ConvertUploadedAudioContainer = readConfig('ConvertUploadedAudioContainer', 'mp3');
+		opt.ConvertUploadedAudioCodec = readConfig('ConvertUploadedAudioCodec', 'libopus');
+		opt.ConvertUploadedAudioBitrate = readConfig('ConvertUploadedAudioBitrate', '128k');
+		opt.ConvertUploadedAudioContainer = readConfig('ConvertUploadedAudioContainer', 'ogg');
+		
+		opt.EnableGetCommand = readConfig('EnableGetCommand', true);
 
 		opt.DefaultRequestTimezone = readConfig('DefaultRequestTimezone', "");
 		opt.DatabaseTimezone = readConfig('DatabaseTimezone', "");
@@ -139,7 +141,8 @@ module.exports = {
 		opt.FfmpegParallelProcLimit = readConfig('FfmpegParallelProcLimit', 6);
 		opt.FileScanParallelLimit = readConfig('FileScanParallelLimit', 4);
 		opt.DBInsertsPerTransaction = readConfig('DBInsertsPerTransaction', 25000);
-		opt.ComplexFiltersAmountLimit = readConfig('ComplexFiltersAmountLimit', 5);
+		opt.ComplexFiltersAmountLimit = readConfig('ComplexFiltersAmountLimit', 5); 
+		opt.FileRequestsParallelProcessLimit = readConfig('FileRequestsParallelProcessLimit', 2);
 
 		opt.permissions.AdminsList = readConfig('permissions.AdminsList', []);
 		opt.permissions.PermissionsLevel = readConfig('permissions.PermissionsLevel', 0);
